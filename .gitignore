@@ -1,0 +1,4 @@
+/target/
+/tests/macos-seatbelt/target/
+/result
+/.direnv/

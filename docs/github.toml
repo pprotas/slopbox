@@ -1,0 +1,31 @@
+# Template only. Replace placeholders and merge into host configuration outside the repository.
+[secrets.github]
+source = "command"
+argv = ["gh", "auth", "token", "--hostname", "github.com", "--user", "ACCOUNT"]
+
+[[http_routes]]
+name = "github-git"
+workspace = "~/Projects/example"
+upstream = "https://github.com/OWNER/REPO.git"
+methods = ["GET", "POST"]
+authentication = { type = "basic", username = "x-access-token", secret = "github" }
+git_urls = [
+  "https://github.com/OWNER/REPO.git",
+  "ssh://git@github.com/OWNER/REPO.git",
+  "git@github.com:OWNER/REPO.git",
+  "github.com:OWNER/REPO.git",
+]
+
+[[http_routes]]
+name = "github-api"
+workspace = "~/Projects/example"
+upstream = "https://api.github.com/repos/OWNER/REPO"
+methods = ["GET", "POST", "PATCH", "PUT"]
+direct = true
+authentication = { type = "bearer", secret = "github" }
+
+[[git.identities]]
+workspace = "~/Projects/example"
+name = "agent"
+email = "agent@example.com"
+signing_key_fingerprint = "SHA256:REPLACE_WITH_YOUR_REGISTERED_SIGNING_KEY"

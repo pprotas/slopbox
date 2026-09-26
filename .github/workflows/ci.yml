@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Rust and package (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, xcode-27]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - run: nix develop --command cargo fmt --check
+      - run: nix develop --command cargo fmt --manifest-path tests/macos-seatbelt/Cargo.toml --check
+      - run: nix develop --command nixfmt --check flake.nix tests/nixos.nix tests/native/nix/flake.nix
+      - run: nix develop --command cargo test --locked
+      - name: Read-only GitHub CLI configuration
+        run: |
+          gh_path=$(command -v gh)
+          SLOPBOX_TEST_GH="$gh_path" nix develop --command cargo test --locked \
+            github::tests::gh_reads_generated_config_without_migration -- --exact --ignored
+      - run: nix develop --command cargo clippy --locked --all-targets -- -D warnings
+      - if: runner.os == 'macOS'
+        run: nix develop --command cargo clippy --manifest-path tests/macos-seatbelt/Cargo.toml --locked --all-targets -- -D warnings
+      - run: nix build -L
+      - run: nix flake check --no-build --all-systems
+
+  e2e:
+    name: Linux enforcement (NixOS VM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Require KVM
+        run: |
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            system-features = nixos-test benchmark big-parallel kvm
+      - run: nix build -L .#checks.x86_64-linux.e2e
