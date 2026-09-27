@@ -59,7 +59,7 @@ pub(crate) fn check(
                 "runtime=project requires flake.nix; provide a trusted project development flake"
             );
             if flake {
-                let nix = super::runtime::system_nix()?;
+                let nix = super::runtime::host_nix()?;
                 Ok(format!(
                     "project flake present; Nix at {} (not evaluated)",
                     nix.display()
@@ -89,9 +89,7 @@ fn executable(name: &str, path: &OsStr) -> Result<PathBuf> {
 
 pub(crate) fn runtime_description(mode: RuntimeMode) -> &'static str {
     match mode {
-        RuntimeMode::Host => {
-            "Entire Nix store and system tools readable, including any stored source"
-        }
+        RuntimeMode::Host => "Entire Nix store readable, including any stored source",
         RuntimeMode::Project => "Selected Nix closure readable; resolved at launch",
         RuntimeMode::Image => "Isolated image requested; not implemented",
     }

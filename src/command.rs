@@ -9,21 +9,19 @@ use anyhow::{Context, Result, bail};
 
 pub(crate) fn system_diff() -> Result<PathBuf> {
     #[cfg(target_os = "linux")]
-    let path = "/run/current-system/sw/bin/diff";
+    {
+        trusted_executable("diff")
+    }
     #[cfg(target_os = "macos")]
-    let path = "/usr/bin/diff";
-    let diff = fs::canonicalize(path).context("required executable diff is not available")?;
-    #[cfg(target_os = "linux")]
-    anyhow::ensure!(
-        diff.starts_with("/nix/store"),
-        "system diff resolves outside /nix/store"
-    );
-    #[cfg(target_os = "macos")]
-    anyhow::ensure!(
-        diff == std::path::Path::new(path),
-        "system diff must be the native /usr/bin/diff"
-    );
-    Ok(diff)
+    {
+        let path = "/usr/bin/diff";
+        let diff = fs::canonicalize(path).context("required executable diff is not available")?;
+        anyhow::ensure!(
+            diff == Path::new(path),
+            "system diff must be the native /usr/bin/diff"
+        );
+        Ok(diff)
+    }
 }
 
 pub(crate) fn trusted_executable(
@@ -33,17 +31,7 @@ pub(crate) fn trusted_executable(
     let path = env::var_os("PATH").context("PATH is not set")?;
     #[cfg(target_os = "linux")]
     {
-        for directory in env::split_paths(&path) {
-            let candidate = directory.join(name);
-            if !candidate.is_file() {
-                continue;
-            }
-            let canonical = fs::canonicalize(&candidate)?;
-            if canonical.starts_with("/nix/store") {
-                return Ok(canonical);
-            }
-        }
-        bail!("required host executable {name} is not available in a trusted PATH entry")
+        nix_executable(name, &path)
     }
     #[cfg(target_os = "macos")]
     native_executable(
@@ -55,6 +43,31 @@ pub(crate) fn trusted_executable(
             Path::new("/usr/local/Cellar"),
         ],
     )
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn nix_executable(name: &str, path: &OsStr) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for directory in env::split_paths(path).filter(|path| path.is_absolute()) {
+        let Ok(directory) = directory.canonicalize() else {
+            continue;
+        };
+        if !directory.starts_with("/nix/store") {
+            continue;
+        }
+        let Ok(canonical) = directory.join(name).canonicalize() else {
+            continue;
+        };
+        let metadata = fs::metadata(&canonical)?;
+        if canonical.starts_with("/nix/store")
+            && metadata.is_file()
+            && metadata.permissions().mode() & 0o111 != 0
+        {
+            return Ok(canonical);
+        }
+    }
+    bail!("required host executable {name} is not available in a trusted Nix PATH entry")
 }
 
 #[cfg(target_os = "macos")]
@@ -113,6 +126,24 @@ pub(crate) fn find_optional_executable(name: &str, path: &OsStr) -> Option<PathB
     env::split_paths(path)
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn host_helpers_reject_executables_and_symlinks_outside_the_store() {
+        let root = tempfile::tempdir().unwrap();
+        let helper = root.path().join("nix");
+        fs::write(&helper, "#!/bin/sh\nexit 99\n").unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(nix_executable("nix", root.path().as_os_str()).is_err());
+        symlink(&helper, root.path().join("diff")).unwrap();
+        assert!(nix_executable("diff", root.path().as_os_str()).is_err());
+        assert!(nix_executable("nix", OsStr::new("")).is_err());
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

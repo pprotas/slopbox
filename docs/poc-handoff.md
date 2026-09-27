@@ -14,6 +14,10 @@ The [generic capabilities POC](poc-generic-capabilities.md) meets its bounded ac
 
 macOS and Linux unit tests, TLS/client tests, strict Clippy and formatting pass. Native shared accounts, existing Git/signing and gh fixtures pass. The full Linux end-to-end suite passes, including Pi separation and contained closure enforcement. See the POC document for commands and environment details. Only disposable test credentials were used.
 
+## Linux runtime follow-up
+
+[Portable Nix-backed Linux](poc-linux-runtime.md) removes NixOS layout assumptions. The runtime resolver now supplies explicit read-only paths, guest links and PATH to enforcement. Stock Ubuntu with single-user Nix passed the full suite without host-system-link or Nix-configuration changes. Nix-less runtime discovery is still separate work.
+
 ## Subsequent work
 
 Bare launch still initializes each project. Generic runtime discovery, arbitrary native command launch, additional model protocols and production TLS rollout remain outside this POC. The one-day session CA has no renewal, mediated uploads require Content-Length, and pinned or proxy-ignoring clients are not supported by this experiment. Do not weaken enforcement to accommodate them.

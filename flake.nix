@@ -50,7 +50,10 @@
               wrapProgram "$out/bin/slopbox" \
                 --prefix PATH : ${
                   lib.makeBinPath [
+                    pkgs.bash
                     pkgs.bubblewrap
+                    pkgs.coreutils
+                    pkgs.diffutils
                     pkgs.wl-clipboard
                   ]
                 }
@@ -108,6 +111,7 @@
               gawk
               git
               gnused
+              nix
               nodejs
               openssh
               openssl

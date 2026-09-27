@@ -89,7 +89,7 @@ Each Nix profile root lives in the native session's control directory. Successfu
 - Trusted Pi extension and wrapper, read-only. Pi's separate private settings and synthetic authentication state remain writable.
 - A generated read-only copy of host `~/.pi/agent/AGENTS.md`, when present, and an allowlisted copy of Pi settings.
 - Selected global Pi resources according to the effective `trusted`, `data`, or `none` harness mode.
-- Developer: entire host `/nix/store` and NixOS system profile, read-only, `nosuid`, and `nodev`.
+- Developer: entire host `/nix/store` and, when present, a Nix-store-backed NixOS system profile, read-only, `nosuid`, and `nodev`.
 - Contained: only the queried closure of the project development profile and required Slopbox, Pi, shell, loader, certificate, and bubblewrap runtime roots.
 - Selected read-only `/etc` files and certificate directories.
 - Private `/proc`, `/dev`, and `/tmp`.
@@ -113,6 +113,7 @@ Slopbox rejects:
 - `/` as a workspace.
 - The host home or an ancestor containing it.
 - A workspace containing Slopbox configuration or state.
+- Linux workspaces overlapping `/nix/store`, which would undermine the read-only runtime grant.
 - Unexpected existing submounts.
 - Unix sockets visible during startup.
 
@@ -136,7 +137,9 @@ Trusted host extensions execute inside Pi's outer process. They can read the mou
 
 ### Explicit filesystem exceptions
 
-In the developer profile, the whole Nix store is readable and may contain source copies from unrelated flakes. Read-only access prevents modification, not disclosure. Its sandbox PATH includes host PATH entries that canonically resolve into the store, and `/run/current-system/sw` is mounted read-only. These binaries do not inherit host filesystem, credential, service-socket, or network authority, but they expose ambient host tooling, reduce reproducibility, and increase parser and shared-kernel attack surface.
+In the developer profile, the whole Nix store is readable and may contain source copies from unrelated flakes. Read-only access prevents modification, not disclosure. Its sandbox PATH includes host PATH entries that canonically resolve into the store. An existing `/run/current-system/sw` is mounted read-only only if it resolves into the store; it is not required. These binaries do not inherit host filesystem, credential, service-socket, or network authority, but they expose ambient host tooling, reduce reproducibility, and increase parser and shared-kernel attack surface.
+
+Linux constructs guest `/bin/sh` and `/usr/bin/env` links from selected Nix executables, not the host distribution's binaries. Nix and the host diff helper are selected from PATH with canonical-store, regular-file and executable checks. Both the PATH directory and executable must resolve into the store. Mutable non-store bin directories are ignored even if individual entries point to store executables. Flake and closure operations explicitly enable the required Nix features in their own process; they do not modify host Nix configuration. A stock Ubuntu/OrbStack installation with single-user Nix passed the full enforcement suite without changing distro executables or creating a NixOS system profile. Hosts still need usable outer and nested user namespaces; Slopbox does not bypass host restrictions or fall back to unsandboxed execution. Nix-less runtime discovery remains unimplemented.
 
 The contained profile requires an activated flake development environment. The host queries its requisites together with required Slopbox, Pi, shell, loader, certificate, and nested-bubblewrap roots, mounts only those top-level store paths, filters the inherited PATH to mounted roots, and does not mount `/run/current-system/sw`. The selected closure can still contain project source, compilers, interpreters, or other build inputs; closure restriction reduces ambient disclosure and tooling but does not make declared dependencies trustworthy.
 

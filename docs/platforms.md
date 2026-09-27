@@ -2,7 +2,7 @@
 
 Slopbox policy is intended to be backend-independent. Filesystem preparation, accounts, identities, approvals, authenticated routes, signing, events, and staged changes should survive a backend change.
 
-The primary runtime is NixOS-oriented and Pi is the supported harness. An [experimental native macOS path](macos.md) now runs explicitly selected Pi/Node and separately sandboxed bash on the tested M1/macOS 27 host. Standard Linux without host Nix, broader native Mac tooling and the VM designs below remain planned.
+The primary Linux runtime requires Nix, but no longer requires NixOS system paths. Pi is the supported harness; see [Nix-backed Linux portability](poc-linux-runtime.md). An [experimental native macOS path](macos.md) now runs explicitly selected Pi/Node and separately sandboxed bash on the tested M1/macOS 27 host. Standard Linux without host Nix, broader native Mac tooling and the VM designs below remain planned.
 
 ## Linux
 

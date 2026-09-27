@@ -57,17 +57,13 @@ pub(crate) struct PreparedDevEnvironment {
     pub store_paths: Vec<PathBuf>,
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) enum RuntimeStore {
-    Host,
-    Selected(Vec<PathBuf>),
-}
-
 pub(crate) struct RuntimePlan {
     #[cfg(target_os = "macos")]
     pub native: macos::runtime::NativeRuntime,
     #[cfg(target_os = "linux")]
-    pub store: RuntimeStore,
+    pub read_only_paths: Vec<PathBuf>,
+    #[cfg(target_os = "linux")]
+    pub system_links: Vec<(PathBuf, PathBuf)>,
     pub path: OsString,
 }
 

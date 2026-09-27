@@ -10,7 +10,7 @@ SLOPBOX=$(realpath "$SLOPBOX")
 SOURCE_ROOT=${2:-}
 TERMINAL_TESTS_DIR=${3:-"$(dirname "$(realpath "${BASH_SOURCE[0]}")")"}
 
-for command in awk bash bwrap cmp curl diff find git node openssl pi rg script sed ssh-add ssh-agent ssh-keygen stty timeout; do
+for command in awk bash bwrap cmp curl diff find findmnt git nix node openssl pi rg script sed ssh-add ssh-agent ssh-keygen stty timeout; do
   if ! command -v "$command" >/dev/null; then
     echo "missing test dependency: $command" >&2
     exit 2
@@ -18,6 +18,10 @@ for command in awk bash bwrap cmp curl diff find git node openssl pi rg script s
 done
 
 node --test "$TERMINAL_TESTS_DIR/pi-rpc.test.mjs"
+
+host_sh=$(realpath /bin/sh)
+host_env=$(realpath /usr/bin/env)
+host_profile=$(realpath -e /run/current-system/sw 2>/dev/null || true)
 
 root=$(mktemp -d)
 cleanup() {
@@ -184,6 +188,36 @@ assert_not_contains() {
   fi
 }
 
+echo "e2e: generic commands do not require Pi on PATH"
+minimal_home="$root/minimal-home"
+minimal_workspace="$root/minimal-workspace"
+mkdir -p "$minimal_home/config/slopbox" "$minimal_workspace"
+cat >"$minimal_home/config/slopbox/config.toml" <<'EOF'
+[policy]
+network = "none"
+credentials = "none"
+harness = "none"
+EOF
+cat >"$minimal_workspace/command.sh" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+test -z "${OPENROUTER_API_KEY-}${SLOPBOX_MODEL_PROXY_PORT-}"
+printf 'generic-command-passed\n'
+EOF
+chmod +x "$minimal_workspace/command.sh"
+minimal_bins=()
+for executable in bash bwrap env diff; do
+  minimal_bins+=("$(dirname "$(realpath "$(type -P "$executable")")")")
+done
+minimal_path=$(IFS=:; printf '%s' "${minimal_bins[*]}")
+env -i HOME="$minimal_home" XDG_CONFIG_HOME="$minimal_home/config" XDG_DATA_HOME="$minimal_home/data" \
+  PATH="$minimal_path" "$SLOPBOX" run --workspace "$minimal_workspace" --dev-env none -- /bin/sh -eu -c '
+  ! command -v pi
+  ./command.sh
+  slopbox tool-run --network none -- /usr/bin/env sh ./command.sh
+' >"$root/minimal-command.out"
+test "$(rg -c '^generic-command-passed$' "$root/minimal-command.out")" = 2
+
 echo "e2e: status is read-only and distinguishes authority"
 status_home="$root/status-home"
 mkdir "$status_home"
@@ -276,11 +310,10 @@ assert_contains '^FAIL Policy:' "$root/unsupported-doctor.out"
 assert_contains '^Namespaces: native probe skipped' "$root/unsupported-doctor.out"
 if env "${common_env[@]}" PATH="$(dirname "$(realpath "$(type -P true)")")" \
   "$SLOPBOX" doctor --workspace "$workspace" >"$root/missing-tools-doctor.out" 2>&1; then
-  echo "doctor accepted missing Pi and sandbox tools" >&2
+  echo "doctor accepted missing Pi" >&2
   exit 1
 fi
 assert_contains '^FAIL Pi executable: install pi on the host' "$root/missing-tools-doctor.out"
-assert_contains '^FAIL Namespaces: install (bwrap|bash) on the host' "$root/missing-tools-doctor.out"
 if env "${common_env[@]}" TMPDIR="$root" bwrap --unshare-user --disable-userns --unshare-pid \
   --ro-bind / / --bind "$root" "$root" --proc /proc --dev /dev \
   "$SLOPBOX" doctor --workspace "$workspace" >"$root/blocked-namespaces-doctor.out" 2>&1; then
@@ -289,14 +322,18 @@ if env "${common_env[@]}" TMPDIR="$root" bwrap --unshare-user --disable-userns -
 fi
 assert_contains '^FAIL Namespaces: native namespace probe failed;' "$root/blocked-namespaces-doctor.out"
 assert_contains '^OK +Pi executable:' "$root/blocked-namespaces-doctor.out"
-if [[ -x /run/current-system/sw/bin/nix ]]; then
-  printf 'throw "SLOPBOX_E2E_FLAKE_MUST_NOT_BE_EVALUATED"\n' >"$workspace/flake.nix"
-  slopbox doctor --workspace "$workspace" --profile contained >"$root/flake-doctor.out"
-  assert_contains '^OK +Development environment: project flake present;' "$root/flake-doctor.out"
-  assert_not_contains 'SLOPBOX_E2E_FLAKE_MUST_NOT_BE_EVALUATED' "$root/flake-doctor.out"
-  test ! -e "$workspace/flake.lock"
-  rm "$workspace/flake.nix"
-fi
+printf 'throw "SLOPBOX_E2E_FLAKE_MUST_NOT_BE_EVALUATED"\n' >"$workspace/flake.nix"
+slopbox doctor --workspace "$workspace" --profile contained >"$root/flake-doctor.out"
+assert_contains '^OK +Development environment: project flake present;' "$root/flake-doctor.out"
+assert_not_contains 'SLOPBOX_E2E_FLAKE_MUST_NOT_BE_EVALUATED' "$root/flake-doctor.out"
+test ! -e "$workspace/flake.lock"
+mkdir "$workspace/bin"
+ln -s "$(realpath "$(type -P bash)")" "$workspace/bin/nix"
+env "${common_env[@]}" PATH="$workspace/bin:$PATH" "$SLOPBOX" doctor --workspace "$workspace" \
+  --profile contained >"$root/untrusted-nix-doctor.out"
+assert_contains "Nix at $(realpath "$(type -P nix)") \\(not evaluated\\)" "$root/untrusted-nix-doctor.out"
+rm "$workspace/bin/nix" "$workspace/flake.nix"
+rmdir "$workspace/bin"
 
 echo "e2e: default launch and host-owned project setup"
 setup_workspace="$root/setup-workspace"
@@ -1067,7 +1104,7 @@ slopbox stage discard --workspace "$git_workspace" "$stage_id" >/dev/null
 assert_not_contains "$canary" "$git_workspace" "$host_home/data/slopbox/boxes"
 cp "$host_home/config/slopbox/config.base.toml" "$host_home/config/slopbox/config.toml"
 
-if [[ -n "$SOURCE_ROOT" && -S /nix/var/nix/daemon-socket/socket ]]; then
+if [[ -n "$SOURCE_ROOT" ]]; then
   echo "e2e: contained project closure"
   contained_workspace="$root/contained-workspace"
   mkdir "$contained_workspace"
@@ -1078,7 +1115,7 @@ network = "none"
 credentials = "none"
 harness = "none"
 EOF
-  realpath /run/current-system/sw/bin/nix-store >"$contained_workspace/unrelated-store-path"
+  realpath "$(type -P nix)" >"$contained_workspace/unrelated-store-path"
   host_store_count=$(find /nix/store -mindepth 1 -maxdepth 1 | wc -l)
   slopbox run --workspace "$contained_workspace" --profile contained -- sh -eu -c '
     rustc --version >contained-result
@@ -1101,6 +1138,18 @@ fi
 
 assert_not_contains "$canary" "$workspace" "$host_home/data/slopbox"
 assert_not_contains "$codex_canary" "$workspace" "$host_home/data/slopbox/boxes"
+echo "e2e: guest runtime links do not depend on host system links"
+slopbox run --workspace "$workspace" --dev-env none -- /bin/sh -eu -c '
+  case "$(realpath /bin/sh)" in /nix/store/*) ;; *) exit 1;; esac
+  case "$(realpath /usr/bin/env)" in /nix/store/*) ;; *) exit 1;; esac
+  /usr/bin/env sh -c '\''test "$SLOPBOX_SANDBOX" = 1'\''
+  for path in /bin/sh /usr/bin/env; do
+    case ",$(findmnt -n -o VFS-OPTIONS -T "$(realpath "$path")")," in *,ro,*) ;; *) exit 1;; esac
+  done
+'
+test "$(realpath /bin/sh)" = "$host_sh"
+test "$(realpath /usr/bin/env)" = "$host_env"
+test "$(realpath -e /run/current-system/sw 2>/dev/null || true)" = "$host_profile"
 echo "e2e: shared identity/accounts and mediated HTTPS clients"
 SHELL=$(type -P bash) node "$TERMINAL_TESTS_DIR/linux-accounts.mjs" "$SLOPBOX"
 echo "e2e: all checks passed"

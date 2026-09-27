@@ -119,7 +119,7 @@ file = "/absolute/path/outside/project/secrets.yaml"
 key = '["FORGE_TOKEN"]'
 ```
 
-A relative SOPS file path is resolved against the workspace associated with the route that uses it. The SOPS executable and identity stay host-side. Decrypted values are retained only in supervisor memory. Linux selects a Nix-store executable from PATH; macOS also accepts executable files in recognized Homebrew Cellar packages, rejecting installations that overlap the workspace. No SOPS identity or additional filesystem grant is passed to either sandbox role.
+A relative SOPS file path is resolved against the workspace associated with the route that uses it. The SOPS executable and identity stay host-side. Decrypted values are retained only in supervisor memory. Linux requires both the PATH directory and executable to resolve into the Nix store; macOS also accepts executable files in recognized Homebrew Cellar packages, rejecting installations that overlap the workspace. No SOPS identity or additional filesystem grant is passed to either sandbox role.
 
 ## Authenticated HTTP routes
 
