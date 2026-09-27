@@ -2,7 +2,7 @@
 
 Slopbox runs coding agents with explicit access to project files, tools, networks, and external accounts. It keeps host credentials outside the agent and records network access that needs human approval.
 
-The current alpha supports Nix-backed Linux with Pi, using native `developer` and `contained` profiles, tested on NixOS and [Ubuntu with Nix](docs/poc-linux-runtime.md). An opt-in [Nix-free Linux runtime](docs/poc-nixless-linux.md) runs selected ELF executables and scripts; it does not infer arbitrary language environments or harness integration. An [experimental native macOS launcher](docs/macos.md) supports explicitly selected Pi/Node and sandboxed bash, not the full Linux feature set. Each backend must independently satisfy its declared security contract.
+The current alpha supports Nix-backed Linux with Pi, using native `developer` and `contained` profiles, tested on NixOS and [Ubuntu with Nix](docs/poc-linux-runtime.md). An opt-in [Nix-free Linux runtime](docs/poc-nixless-linux.md) runs selected ELF executables and scripts, with explicit [application bundles](docs/poc-runtime-bundles.md) for plugins and package data. Unmodified Aider is acceptance-tested; automatic harness/tool separation is not provided. An [experimental native macOS launcher](docs/macos.md) supports explicitly selected Pi/Node and sandboxed bash, not the full Linux feature set. Each backend must independently satisfy its declared security contract.
 
 ## What it does
 
@@ -100,7 +100,7 @@ nix flake check
 nix run .#e2e
 ```
 
-`nix run .#e2e` runs directly on Nix-backed Linux and requires working outer/nested user namespaces. The app supplies its test tools, including Pi. It validates direct and contained runtime paths, with either single-user Nix or a daemon, without making a model request. CI has separate Ubuntu-host and NixOS-VM jobs; the latter requires KVM. The Nix-free job instead builds with distro tools and runs `python3 tests/linux-nixless.py target/debug/slopbox` on a host without `/nix`.
+`nix run .#e2e` runs directly on Nix-backed Linux and requires working outer/nested user namespaces. The app supplies its test tools, including Pi. It validates direct and contained runtime paths, with either single-user Nix or a daemon, without making a model request. CI has separate Ubuntu-host and NixOS-VM jobs; the latter requires KVM. The Nix-free job instead builds with distro tools and runs `tests/linux-nixless.py`, `tests/linux-bundles.py` and the pinned Aider fixture `tests/linux-harness.py` on a host without `/nix`. See [bundle test preparation](docs/poc-runtime-bundles.md#validation).
 
 With direnv/nix-direnv configured on the host, review `.envrc` and run `direnv allow` to activate the development shell automatically.
 

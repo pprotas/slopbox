@@ -2,7 +2,7 @@
 
 **Status: implemented; bounded acceptance passes on a fresh Ubuntu installation without Nix.**
 
-Follow-up to [portable Nix-backed Linux](poc-linux-runtime.md). This slice supplies a host-selected runtime for ordinary Linux commands, not automatic language environments or harness integration.
+Follow-up to [portable Nix-backed Linux](poc-linux-runtime.md). This slice supplies a host-selected runtime for ordinary Linux commands, not automatic language environments or harness integration. The subsequent [application-bundle slice](poc-runtime-bundles.md) adds explicit read-only resource trees and non-Pi harness acceptance.
 
 ## Use
 
@@ -37,14 +37,14 @@ Presence of `[runtime]` selects file-level discovery instead of the ambient Nix 
 
 The resolver reads native ELF interpreters, NEEDED entries, RPATH/RUNPATH and the protected loader cache without running the selected executable or `ldd`. It supports `$ORIGIN`, absolute script interpreters, and simple `/usr/bin/env name` shebangs with a selected interpreter. ELF metadata describes dependencies, not permission: files must be explicitly selected, beneath a host-authorized dependency prefix, or in a protected root-owned installation.
 
-The existing launcher consumes read-only files, guest links and PATH. It does not mount `/usr`, library directories, package caches or home directories. Slopbox, bubblewrap, Bash and env are required infrastructure; ssh-keygen is added for signing. Known credential/control roots, workspace overlaps, private guest paths and user-owned hard-link aliases are rejected. The generated root and runtime aliases are read-only; separate workspace/home/tmp mounts retain their intended writability. Inner execution uses the fixed session bubblewrap entry, not a caller-controlled PATH lookup.
+The existing launcher consumes read-only paths, guest links and PATH. File discovery does not mount `/usr`, library directories, package caches or home directories. Optional `runtime.bundles` separately authorizes dedicated application trees; dependency roots alone never do. Slopbox, bubblewrap, Bash and env are required infrastructure; ssh-keygen is added for signing. Known credential/control roots, workspace overlaps, private guest paths and user-owned hard-link aliases are rejected. The generated root and runtime aliases are read-only; separate workspace/home/tmp mounts retain their intended writability. Inner execution uses the fixed session bubblewrap entry, not a caller-controlled PATH lookup.
 
 Host-side helpers remain a separate authority. They require an existing Nix package or root-owned, non-group/world-writable executables with protected ancestry. Selecting a guest program does not authorize running it as a host credential or discovery helper.
 
 ## Limits
 
 - Tested with native 64-bit little-endian glibc ELF on aarch64 Ubuntu/OrbStack; x86_64 Ubuntu CI is configured but has not run remotely.
-- Dynamic plugins, application data, language package trees and subprocess commands are not inferred. Missing files stay unavailable. Declare additional executable entry points where sufficient; this is not yet a complete Python/Node/compiler environment resolver.
+- Dynamic plugins, application data and language packages require explicit [bundles](poc-runtime-bundles.md). Additional subprocess entry points require selection when not supplied by those bundles. Missing files stay unavailable; this is not a complete Python/Node/compiler environment resolver.
 - Relative search paths, `$LIB`/`$PLATFORM`, ELF audit/filter/NODEFLIB semantics, complex env shebangs and oversized/deep graphs fail closed.
 - Installations must stay stable during a session. Discovery is not an atomic filesystem snapshot. User-owned hard-linked build outputs need an installed copy outside the workspace.
 - Generic commands share their outer role's authority. Only explicit `tool-run` cooperation establishes model/tool separation; arbitrary harnesses do not acquire that boundary automatically.

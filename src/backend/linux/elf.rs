@@ -1,3 +1,5 @@
+mod bundles;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -92,6 +94,7 @@ pub(crate) fn prepare(
         );
         discovery.dependency_roots.push(root);
     }
+    discovery.select_bundles(&selection.bundles, &home)?;
     for path in selected_paths {
         discovery.file(&path)?;
     }
@@ -100,14 +103,11 @@ pub(crate) fn prepare(
         discovery.link(Path::new(BIN).join(name), path.clone())?;
     }
     discovery.executable(&slopbox, &tools)?;
+    discovery.discover_bundles()?;
     discovery.link("/bin/sh".into(), tools["bash"].clone())?;
     discovery.link("/usr/bin/env".into(), tools["env"].clone())?;
     discovery.link("/run/slopbox/bwrap".into(), tools["bwrap"].clone())?;
-    Ok(RuntimePlan {
-        read_only_paths: discovery.files.into_iter().collect(),
-        system_links: discovery.links.into_iter().collect(),
-        path: BIN.into(),
-    })
+    Ok(discovery.plan())
 }
 
 struct Discovery {
@@ -115,6 +115,8 @@ struct Discovery {
     forbidden: Vec<PathBuf>,
     selected: HashSet<PathBuf>,
     dependency_roots: Vec<PathBuf>,
+    bundles: BTreeMap<PathBuf, PathBuf>,
+    bundled_libraries: HashMap<String, Vec<PathBuf>>,
     cache: HashMap<String, Vec<PathBuf>>,
     files: BTreeSet<PathBuf>,
     links: BTreeMap<PathBuf, PathBuf>,
@@ -166,6 +168,8 @@ impl Discovery {
             forbidden,
             selected: HashSet::new(),
             dependency_roots: Vec::new(),
+            bundles: BTreeMap::new(),
+            bundled_libraries: HashMap::new(),
             cache: HashMap::new(),
             files: BTreeSet::new(),
             links: BTreeMap::new(),
@@ -233,6 +237,7 @@ impl Discovery {
         self.check(path)?;
         ensure!(
             self.selected.contains(path)
+                || self.bundles.values().any(|root| path.starts_with(root))
                 || self
                     .dependency_roots
                     .iter()
@@ -454,6 +459,14 @@ impl Discovery {
                     if self.compatible(&path, &elf)? {
                         candidates.push(path);
                         break;
+                    }
+                }
+            }
+            if candidates.is_empty() {
+                // dlopen callers can supply search paths we cannot infer statically.
+                for path in self.bundled_libraries.get(*name).into_iter().flatten() {
+                    if self.compatible(path, &elf)? {
+                        candidates.push(path.clone());
                     }
                 }
             }

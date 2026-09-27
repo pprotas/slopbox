@@ -90,9 +90,19 @@ executables = ["curl", "git"]
 
 Use `slopbox run --dev-env none -- COMMAND`; this mode does not provide Pi default launch/setup. `runtime=project` and contained profiles do not fall back to it. Model/account/signing authority remains governed independently.
 
-Names select protected host installations. Absolute and `~/` executable paths select user installations; authorize their dependency prefix with `dependency_roots = ["~/.local/tools/example"]`. Only discovered files are mounted, not whole prefixes. Repository configuration cannot declare either field. `status --verbose` reports the host selection without running discovery or resolving secrets.
+Names select protected host installations. Absolute and `~/` executable paths select user installations; authorize their dependency prefix with `dependency_roots = ["~/.local/tools/example"]`. Dependency roots authorize discovered files, not whole-prefix mounts. Repository configuration cannot declare runtime grants. `status --verbose` reports the host selection without running discovery or resolving secrets.
 
-See [installation, validation and limits](poc-nixless-linux.md). This is native ELF and basic script discovery, not automatic plugin, language-package or application-data imports. Generic execution does not imply harness/tool separation.
+For application data, plugins and installed language environments, explicitly select dedicated trees:
+
+```toml
+[runtime]
+executables = ["~/.local/tools/example/bin/example"]
+bundles = ["~/.local/tools/example", "~/.local/tools/python"]
+```
+
+Unlike `dependency_roots`, each bundle grants its **entire tree as read-only code and data**, at its host path. Select application installations, not homes or package-manager caches, and keep secrets out. Native ELF files in bundles receive dependency discovery; Slopbox does not execute package managers or activation scripts. External data/directory links require another explicit bundle. Native ELF links use the existing dependency authorization. Bundles remain unavailable to repository configuration and cannot overlap the workspace or credential/control paths.
+
+See [executable limits](poc-nixless-linux.md) and [bundle behavior and non-Pi harness validation](poc-runtime-bundles.md). Resources outside selected bundles are not automatically inferred. Generic execution does not imply harness/tool separation.
 
 ## Pi resources
 

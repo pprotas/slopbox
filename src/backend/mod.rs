@@ -64,6 +64,8 @@ pub(crate) struct RuntimeSelection {
     pub executables: Vec<PathBuf>,
     #[serde(default)]
     pub dependency_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub bundles: Vec<PathBuf>,
 }
 
 pub(crate) struct RuntimePlan {

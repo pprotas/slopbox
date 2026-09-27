@@ -986,6 +986,12 @@ fn describe_status(
                     root.display()
                 ));
             }
+            for bundle in &runtime.bundles {
+                lines.push(format!(
+                    "runtime-bundle: {} (whole tree, read-only code and data)",
+                    bundle.display()
+                ));
+            }
         }
         for (source, target) in resources.mounts {
             lines.push(format!(

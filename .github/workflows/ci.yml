@@ -60,13 +60,21 @@ jobs:
         run: |
           test ! -e /nix
           sudo apt-get update
-          sudo apt-get install -y build-essential bubblewrap curl git cmake pkg-config openssh-client openssl python3
+          sudo apt-get install -y build-essential bubblewrap curl git cmake pkg-config openssh-client openssl python3-venv
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - run: cargo fmt --all -- --check
       - run: cargo test --locked --all-targets
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo build --locked
-      - run: python3 tests/linux-nixless.py target/debug/slopbox
+      - run: /usr/bin/python3 tests/linux-nixless.py target/debug/slopbox
+      - run: /usr/bin/python3 tests/linux-bundles.py target/debug/slopbox
+      - name: Prepare a disposable harness installation
+        run: |
+          /usr/bin/python3 -m venv "$HOME/slopbox-harness-fixture"
+          "$HOME/slopbox-harness-fixture/bin/pip" install aider-chat==0.86.2
+          TIKTOKEN_CACHE_DIR="$HOME/slopbox-harness-fixture/tiktoken" \
+            "$HOME/slopbox-harness-fixture/bin/python" -c 'import tiktoken; tiktoken.encoding_for_model("gpt-4o")'
+      - run: /usr/bin/python3 tests/linux-harness.py target/debug/slopbox "$HOME/slopbox-harness-fixture"
 
   e2e-host:
     name: Linux enforcement (Ubuntu with Nix)
