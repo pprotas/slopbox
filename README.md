@@ -2,7 +2,7 @@
 
 Slopbox runs coding agents with explicit access to project files, tools, networks, and external accounts. It keeps host credentials outside the agent and records network access that needs human approval.
 
-The current alpha supports Nix-backed Linux with Pi, using native `developer` and `contained` profiles, tested on NixOS and [Ubuntu with Nix](docs/poc-linux-runtime.md). An opt-in [Nix-free Linux runtime](docs/poc-nixless-linux.md) runs selected ELF executables and scripts, with explicit [application bundles](docs/poc-runtime-bundles.md) for plugins and package data. Unmodified Aider is acceptance-tested; automatic harness/tool separation is not provided. An [experimental native macOS launcher](docs/macos.md) supports explicitly selected Pi/Node and sandboxed bash, not the full Linux feature set. Each backend must independently satisfy its declared security contract.
+The current alpha supports Nix-backed Linux with Pi, using native `developer` and `contained` profiles, tested on NixOS and [Ubuntu with Nix](docs/poc-linux-runtime.md). An opt-in [Nix-free Linux runtime](docs/poc-nixless-linux.md) runs selected ELF executables and scripts, with explicit [application bundles](docs/poc-runtime-bundles.md) for plugins and package data. Unmodified Aider and [headless Claude Code](docs/poc-claude-code.md) have local fixture coverage; automatic harness/tool separation is not provided. The [experimental native macOS launcher](docs/macos.md) supports Pi/Node with separate shell enforcement and [generic selected commands](docs/poc-native-runtime.md), including the Claude fixture. It does not provide the full Linux feature set. Each backend must independently satisfy its declared security contract.
 
 ## What it does
 

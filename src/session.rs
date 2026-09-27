@@ -190,7 +190,6 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     );
     policy.ensure_implemented(profile)?;
     validate_runtime_selection(&config, policy)?;
-    #[cfg(target_os = "linux")]
     if config.runtime.is_some() {
         ensure!(
             !backend::nix::enabled(&paths.workspace, options.dev_env)?,
@@ -206,12 +205,16 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         .map(|selection| native::elf::prepare(selection, &paths.workspace, git_identity.is_some()))
         .transpose()?;
     #[cfg(target_os = "macos")]
+    let selected_runtime = config
+        .runtime
+        .as_ref()
+        .map(|selection| native::runtime::selected::prepare(selection, &paths.workspace))
+        .transpose()?;
+    #[cfg(target_os = "macos")]
     {
         native::validate(
-            config
-                .macos
-                .as_ref()
-                .context("native runtime is not configured")?,
+            config.macos.as_ref(),
+            selected_runtime.is_some(),
             &paths.workspace,
             policy,
             &options.command,
@@ -341,6 +344,15 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         (session, brokers)
     };
     #[cfg(target_os = "macos")]
+    let private_home = if selected_runtime.is_some() {
+        // Keep per-run application paths short and inside owned session state.
+        let home = native_session.directory().join("home");
+        create_private_home(&home)?;
+        home
+    } else {
+        private_home
+    };
+    #[cfg(target_os = "macos")]
     let dev_environment = prepare_dev_environment(
         native_session.directory(),
         &workspace_mount.source,
@@ -361,39 +373,49 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
             &native_session.executable(),
         )?;
     }
-    let harness = pi.prepare(&PrepareContext {
-        #[cfg(target_os = "macos")]
-        native: config.macos.as_ref(),
-        session_dir: session_dir.path(),
-        private_home: &paths.private_home,
-        host_path: if config.runtime.is_some() {
-            OsStr::new("")
-        } else {
-            &host_path
-        },
-        profile,
-        general_network,
-        tool_network: network.tool,
-        model_providers: if network.model {
-            gateway
-                .as_ref()
-                .map(GatewaySession::providers)
-                .unwrap_or_default()
-        } else {
-            &[]
-        },
-        dry_run: options.dry_run,
-    })?;
+    #[cfg(target_os = "macos")]
+    let generic = config.runtime.is_some();
+    #[cfg(target_os = "linux")]
+    let generic = false;
+    let harness = if generic {
+        crate::harness::PreparedHarness::default()
+    } else {
+        pi.prepare(&PrepareContext {
+            #[cfg(target_os = "macos")]
+            native: config.macos.as_ref(),
+            session_dir: session_dir.path(),
+            private_home: &paths.private_home,
+            host_path: if config.runtime.is_some() {
+                OsStr::new("")
+            } else {
+                &host_path
+            },
+            profile,
+            general_network,
+            tool_network: network.tool,
+            model_providers: if network.model {
+                gateway
+                    .as_ref()
+                    .map(GatewaySession::providers)
+                    .unwrap_or_default()
+            } else {
+                &[]
+            },
+            dry_run: options.dry_run,
+        })?
+    };
     let runtime = prepare_runtime(
         policy.runtime,
         &host_path,
         dev_environment.as_ref(),
+        #[cfg(target_os = "linux")]
         harness.executable.as_deref(),
+        #[cfg(target_os = "linux")]
         git_signing.is_some(),
+        #[cfg(target_os = "linux")]
         options.dry_run,
         #[cfg(target_os = "macos")]
         &paths.workspace,
-        #[cfg(target_os = "linux")]
         selected_runtime,
     )?;
     let mut clipboard = if cfg!(target_os = "linux")
@@ -493,7 +515,8 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn macos_config() -> Result<Option<native::Config>> {
+pub(crate) fn macos_config() -> Result<(Option<native::Config>, Option<backend::RuntimeSelection>)>
+{
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")?;
@@ -501,7 +524,8 @@ pub(crate) fn macos_config() -> Result<Option<native::Config>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config"))
         .join("slopbox");
-    Ok(load_config(&root)?.macos)
+    let config = load_config(&root)?;
+    Ok((config.macos, config.runtime))
 }
 
 fn prepare_paths(workspace: Option<&Path>) -> Result<Paths> {
@@ -667,7 +691,6 @@ pub fn doctor(
         policy,
         &mut checks,
         &mut lines,
-        #[cfg(target_os = "linux")]
         config.runtime.as_ref(),
     );
     let mut failures = 0;
@@ -715,10 +738,6 @@ fn check_model_configuration(paths: &Paths, policy: Policy) -> Result<String> {
 
 fn validate_runtime_selection(config: &SlopboxConfig, policy: Policy) -> Result<()> {
     if config.runtime.is_some() {
-        ensure!(
-            cfg!(target_os = "linux"),
-            "selected executable runtimes are currently implemented on Linux only"
-        );
         ensure!(
             policy.runtime == RuntimeMode::Host,
             "selected executable runtimes require runtime=host; no fallback from a project or image runtime"
@@ -770,7 +789,7 @@ fn describe_status(
         format!(
             "Host tools    {}",
             if config.runtime.is_some() {
-                "Explicit host executables and discovered files only; read-only"
+                "Selected executables, resources and platform base; read-only"
             } else {
                 native::diagnostics::runtime_description(policy.runtime)
             }
@@ -787,7 +806,9 @@ fn describe_status(
         ),
         format!(
             "Tool internet {}",
-            if policy.network == NetworkMode::None || tool_network == ToolNetwork::None {
+            if config.runtime.is_some() {
+                "No automatic separation; subprocesses inherit outer access"
+            } else if policy.network == NetworkMode::None || tool_network == ToolNetwork::None {
                 "General egress disabled; configured account routes remain available"
             } else {
                 "Pi shell tools can use approved destinations and configured account routes"

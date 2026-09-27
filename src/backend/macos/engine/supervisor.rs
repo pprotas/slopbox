@@ -344,7 +344,7 @@ pub(super) fn arguments(bytes: &[u8]) -> io::Result<Vec<&str>> {
         .strip_suffix('\0')
         .ok_or_else(|| io::Error::other("unterminated request"))?;
     let arguments: Vec<_> = body.split('\0').collect();
-    if arguments.len() > 32 || !arguments[0].starts_with('/') {
+    if arguments.len() > 256 || !arguments[0].starts_with('/') {
         return Err(io::Error::other("invalid arguments"));
     }
     Ok(arguments)

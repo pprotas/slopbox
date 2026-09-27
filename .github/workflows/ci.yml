@@ -75,6 +75,18 @@ jobs:
           TIKTOKEN_CACHE_DIR="$HOME/slopbox-harness-fixture/tiktoken" \
             "$HOME/slopbox-harness-fixture/bin/python" -c 'import tiktoken; tiktoken.encoding_for_model("gpt-4o")'
       - run: /usr/bin/python3 tests/linux-harness.py target/debug/slopbox "$HOME/slopbox-harness-fixture"
+      - name: Prepare a disposable native Claude Code installation
+        run: |
+          directory="$HOME/slopbox-claude-fixture"
+          mkdir -p "$directory/versions"
+          curl --fail --location --retry 3 \
+            https://downloads.claude.ai/claude-code-releases/2.1.283/linux-x64/claude \
+            -o "$directory/versions/2.1.283"
+          printf '%s  %s\n' 1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2 \
+            "$directory/versions/2.1.283" | sha256sum --check
+          chmod 755 "$directory/versions/2.1.283"
+          ln -s versions/2.1.283 "$directory/claude"
+      - run: /usr/bin/python3 tests/claude-harness.py target/debug/slopbox "$HOME/slopbox-claude-fixture/claude"
 
   e2e-host:
     name: Linux enforcement (Ubuntu with Nix)

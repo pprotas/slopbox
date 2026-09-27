@@ -116,6 +116,12 @@ impl AuthenticatedHttpRoute {
         #[cfg(all(test, target_os = "macos"))]
         let route = {
             let mut route = route;
+            if route.upstream_base.host_str() == Some("127.0.0.1")
+                && allow_private_addresses
+                && let Some(path) = std::env::var_os("SLOPBOX_TEST_TLS_CA")
+            {
+                route.test_root = Some(reqwest::Certificate::from_pem(&std::fs::read(path)?)?);
+            }
             if matches!(
                 route.upstream_base.host_str(),
                 Some("forgejo.native.invalid" | "github.native.invalid")

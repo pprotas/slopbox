@@ -24,3 +24,6 @@ url = "2.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 goblin = { version = "0.10.7", default-features = false, features = ["std", "elf32", "elf64", "endian_fd"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+goblin = { version = "0.10.7", default-features = false, features = ["std", "mach32", "mach64", "endian_fd"] }

@@ -14,10 +14,13 @@ use crate::backend::{PreparedDevEnvironment, RuntimePlan};
 use crate::policy::RuntimeMode;
 
 mod nix;
+pub(crate) mod selected;
 
 pub(crate) struct NativeRuntime {
-    pub config: Config,
+    pub config: Option<Config>,
     pub tools: DeveloperTools,
+    pub selected_files: Vec<PathBuf>,
+    pub system_data: Vec<PathBuf>,
 }
 
 #[derive(Default, Debug)]
@@ -117,6 +120,8 @@ impl Boundary {
             ".kube",
             ".password-store",
             ".pi",
+            ".claude",
+            ".codex",
             ".config",
             ".cargo",
             ".netrc",
@@ -530,11 +535,12 @@ pub(crate) fn prepare_runtime(
     mode: RuntimeMode,
     path: &OsStr,
     environment: Option<&PreparedDevEnvironment>,
-    _harness: Option<&Path>,
-    _signing: bool,
-    _dry_run: bool,
     workspace: &Path,
+    selected: Option<RuntimePlan>,
 ) -> Result<RuntimePlan> {
+    if let Some(runtime) = selected {
+        return Ok(runtime);
+    }
     ensure!(
         matches!(mode, RuntimeMode::Host | RuntimeMode::Project),
         "unsupported native runtime capability"
@@ -544,6 +550,7 @@ pub(crate) fn prepare_runtime(
         "runtime=project requires an activated flake development environment"
     );
     let config = crate::session::macos_config()?
+        .0
         .context("missing native runtime")?
         .resolve()?;
     let mut tools = if mode == RuntimeMode::Host {
@@ -562,7 +569,12 @@ pub(crate) fn prepare_runtime(
     }
     Ok(RuntimePlan {
         path: path.to_owned(),
-        native: NativeRuntime { config, tools },
+        native: NativeRuntime {
+            config: Some(config),
+            tools,
+            selected_files: Vec::new(),
+            system_data: Vec::new(),
+        },
     })
 }
 

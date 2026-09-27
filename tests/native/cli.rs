@@ -32,6 +32,71 @@ fn native_cli_fixture() {
 }
 
 #[test]
+#[ignore = "host integration: set SLOPBOX_TEST_NODE and SLOPBOX_TEST_SLOPBOX"]
+fn native_cli_generic_commands() {
+    let output = std::process::Command::new("/usr/bin/python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/native/generic.py"
+        ))
+        .arg(std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required"))
+        .arg(std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"))
+        .env_clear()
+        .current_dir("/")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("command exit-status propagation"));
+}
+
+#[test]
+#[ignore = "host integration: set SLOPBOX_TEST_CLAUDE, SLOPBOX_TEST_NODE and SLOPBOX_TEST_SLOPBOX"]
+fn native_cli_claude_harness() {
+    let output = std::process::Command::new("/usr/bin/python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/claude-harness.py"
+        ))
+        .arg(std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required"))
+        .arg(std::env::var_os("SLOPBOX_TEST_CLAUDE").expect("reviewed Claude path required"))
+        .arg(std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"))
+        .arg(std::env::current_exe().unwrap())
+        .env_clear()
+        .current_dir("/")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("two workspaces"));
+}
+
+#[test]
+#[ignore = "subprocess fixture for native generic commands with a disposable TLS CA"]
+fn native_generic_fixture() {
+    assert!(
+        std::env::var_os("SLOPBOX_TEST_SLOPBOX").is_some(),
+        "production worker required"
+    );
+    assert!(
+        std::env::var_os("SLOPBOX_TEST_TLS_CA").is_some(),
+        "disposable fixture CA required"
+    );
+    let arguments: Vec<String> =
+        serde_json::from_str(&std::env::var("SLOPBOX_TEST_NATIVE_ARGS").unwrap()).unwrap();
+    let cli = Cli::try_parse_from(std::iter::once("slopbox".to_owned()).chain(arguments)).unwrap();
+    run_cli(cli).unwrap();
+}
+
+#[test]
 fn native_cli_fixture_requires_a_production_worker() {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([

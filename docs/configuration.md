@@ -104,6 +104,12 @@ Unlike `dependency_roots`, each bundle grants its **entire tree as read-only cod
 
 See [executable limits](poc-nixless-linux.md) and [bundle behavior and non-Pi harness validation](poc-runtime-bundles.md). Resources outside selected bundles are not automatically inferred. Generic execution does not imply harness/tool separation.
 
+## Selected native macOS executables
+
+The same host-owned `[runtime].executables` selection supports generic native commands without `[macos]` Pi/Node configuration. It requires `runtime=host`, `harness=none` and `--dev-env none` when a project has a flake. Bare names select system commands; other installations need absolute or `~/` paths.
+
+This native slice accepts host-architecture Mach-O executables using system libraries and simple bash/sh scripts. `bundles`, `dependency_roots` and non-system dylibs are rejected rather than ignored. Generic subprocesses retain outer account/model authority; there is no native `tool-run` role in this mode. See [runtime grants and limitations](poc-native-runtime.md).
+
 ## Pi resources
 
 ```toml

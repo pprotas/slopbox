@@ -14,7 +14,12 @@ impl Fixture {
         };
         let tools = DeveloperTools::from_host(&self.host, &config.node).unwrap();
         let runtime = RuntimePlan {
-            native: NativeRuntime { config, tools },
+            native: NativeRuntime {
+                config: Some(config),
+                tools,
+                selected_files: Vec::new(),
+                system_data: Vec::new(),
+            },
             path: OsString::new(),
         };
         crate::backend::macos::profile::render(

@@ -44,6 +44,8 @@
               "--skip=backend::macos::engine::coalition::tests::the_host_coalition_cannot_be_terminated"
               "--skip=backend::macos::engine::coalition::tests::a_stale_process_version_cannot_signal_a_live_process"
               "--skip=command::tests::native_diff_accepts_stage_labels_without_using_path"
+              # The build sandbox strips set-id bits; host enforcement tests cover them.
+              "--skip=backend::macos::runtime::selected::tests::selected_native_runtime_rejects_setid_executables"
               "--skip=terminal::tests::private_pty_has_cloexec_descriptors_and_reports_resize_and_eof"
             ];
             postInstall = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''

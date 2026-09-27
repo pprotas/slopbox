@@ -2,6 +2,8 @@
 
 The [project direction](direction.md) is authoritative. These are backlog candidates, not an implementation sequence or a list of supported combinations. Establish the generic contracts before expanding this matrix. Pi and the existing OpenRouter/OpenAI Codex brokers remain regression baselines.
 
+Basic command isolation now has local fixtures for [Aider](poc-runtime-bundles.md) and [native Claude Code](poc-claude-code.md). Claude's fixture uses a deterministic Anthropic-compatible bearer gateway, not Bedrock or a live subscription. These account-route tests do not satisfy the stronger harness/tool-separated contract below.
+
 ## Target matrix
 
 | Harness | Initial provider path | Copilot target |
@@ -46,4 +48,4 @@ Current upstream sources inspected during planning:
 - [OpenCode provider documentation](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/providers.mdx): Copilot device login and configurable provider endpoints.
 - [Codex provider configuration source](https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/src/lib.rs): custom base URLs, Responses transport, and authentication configuration.
 
-Pin released harness versions for implementation and acceptance tests. Repository branch tips are research evidence, not the supported version contract. Claude Code's current Bedrock and gateway documentation still needs verification before selecting its exact routing and credential configuration.
+Pin released harness versions for implementation and acceptance tests. Repository branch tips are research evidence, not the supported version contract. Claude Code's gateway configuration/protocol is checked for the pinned fixture above; its Bedrock routing and credential configuration still needs separate verification.
