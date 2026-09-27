@@ -5,7 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 
 use crate::ToolNetwork;
 
@@ -34,8 +34,11 @@ pub fn run(network: ToolNetwork, child: &[OsString]) -> Result<ExitStatus> {
     let tool_home = Path::new("/run/slopbox-tool-home");
     ensure!(tool_home.is_dir(), "Slopbox tool home is unavailable");
 
-    let path = env::var_os("PATH").context("PATH is not set")?;
-    let bwrap = find_executable("bwrap", &path)?;
+    let bwrap = Path::new("/run/slopbox/bwrap");
+    ensure!(
+        bwrap.is_file(),
+        "session bubblewrap executable is unavailable"
+    );
     let mut command = Command::new(bwrap);
     command.env_clear();
     command.args([
@@ -247,21 +250,6 @@ fn blocked_environment_variable(name: &OsStr) -> bool {
                 | b"NO_PROXY"
                 | b"no_proxy"
         )
-}
-
-fn find_executable(name: &str, path: &OsStr) -> Result<PathBuf> {
-    for directory in env::split_paths(path) {
-        let candidate = directory.join(name);
-        if candidate.is_file() {
-            let canonical = fs::canonicalize(&candidate)?;
-            ensure!(
-                canonical.starts_with("/nix/store"),
-                "required executable {name} resolves outside /nix/store"
-            );
-            return Ok(canonical);
-        }
-    }
-    bail!("required executable {name} is not available in PATH")
 }
 
 #[cfg(test)]

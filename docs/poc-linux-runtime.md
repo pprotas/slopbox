@@ -12,7 +12,7 @@ This follows the [generic capabilities POC](poc-generic-capabilities.md) and [pr
 - Demonstrate an ordinary non-Pi command, project-runtime execution, staging/diff, signing/accounts and the existing Pi separation suite.
 - Preserve macOS behavior and NixOS compatibility. Inspection does not evaluate flakes or resolve secrets.
 
-The Linux runtime plan describes read-only paths, guest system links and PATH; enforcement consumes that plan without selecting a store mode or inspecting host shell paths. Nix supplies dependency closures. Nix-less ELF/library/resource discovery and arbitrary macOS command launch remain separate work, not fallback paths that expose host `/usr`, libraries or home directories.
+The Linux runtime plan describes read-only paths, guest system links and PATH; enforcement consumes that plan without selecting a store mode or inspecting host shell paths. Nix supplies dependency closures. The [Nix-free ELF/script follow-up](poc-nixless-linux.md) uses that same plan. It is opt-in, not a fallback that exposes host `/usr`, libraries or home directories.
 
 ## Validation
 
@@ -26,4 +26,4 @@ nix --extra-experimental-features 'nix-command flakes' run .#e2e
 
 The host kernel and security policy must permit outer and nested user namespaces. Slopbox does not change sysctls or bypass AppArmor/container restrictions; `slopbox doctor` reports namespace failures. Nix-installed tools still need to be available on host PATH. The package supplies Bash, env/coreutils, diff and bubblewrap; Pi and workload-specific tools remain separate selections.
 
-Generic command execution is not automatic harness/tool separation. Non-Pi harness integration, model protocol compatibility and Nix-less dependency discovery remain subsequent work.
+Generic command execution is not automatic harness/tool separation. Non-Pi harness integration, model protocol compatibility and dynamic runtime/resource discovery remain subsequent work.

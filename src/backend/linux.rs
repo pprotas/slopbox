@@ -1,4 +1,5 @@
 pub(crate) mod diagnostics;
+pub(crate) mod elf;
 pub(crate) mod init;
 pub(crate) mod probe;
 pub(crate) mod runtime;
@@ -239,7 +240,7 @@ pub(crate) fn command(
         child
     };
 
-    command.arg("--");
+    command.args(["--remount-ro", "/", "--"]);
     if !proxies.is_empty() {
         command.arg("/run/slopbox/slopbox").arg("__sandbox-init");
         for (name, endpoint) in &proxies {
@@ -298,21 +299,31 @@ pub(crate) fn sandbox_path() -> Result<OsString> {
         }
     }
 
+    if entries.is_empty() {
+        for entry in env::split_paths(&host_path).filter(|entry| entry.is_absolute()) {
+            if let Ok(canonical) = crate::command::protected_system_path(&entry)
+                && canonical.is_dir()
+                && seen.insert(canonical.clone())
+            {
+                entries.push(canonical);
+            }
+        }
+    }
     ensure!(
         !entries.is_empty(),
-        "PATH contains no usable Nix store directories"
+        "PATH contains no usable absolute directories"
     );
     env::join_paths(entries).context("failed to construct sandbox PATH")
 }
 
 pub(crate) fn required_executor(path: &OsStr) -> Result<PathBuf> {
     find_executable("bwrap", path).context(
-        "bubblewrap is required on the host before launch; use the packaged slopbox command or run this debug binary with nix develop -c ./target/debug/slopbox",
+        "bubblewrap is required on the host before launch; install the distro bubblewrap package or use the Nix-packaged slopbox command",
     )
 }
 
 pub(crate) fn find_executable(name: &str, path: &OsStr) -> Result<PathBuf> {
-    crate::command::nix_executable(name, path)
+    crate::command::host_executable(name, path)
         .with_context(|| format!("required executable {name} is not available in the sandbox PATH"))
 }
 
@@ -475,8 +486,22 @@ fn decode_mountinfo_path(value: &str) -> Result<OsString> {
 
 pub(crate) fn validate_workspace_target(workspace: &Path) -> Result<()> {
     ensure!(
-        !workspace.starts_with("/home/slopbox"),
+        !workspace.starts_with("/home/slopbox")
+            && !Path::new("/home/slopbox").starts_with(workspace),
         "workspace conflicts with the sandbox-private home path"
+    );
+    ensure!(
+        [
+            "/run/slopbox",
+            "/run/slopbox-host",
+            "/run/slopbox-tool-home",
+            "/run/slopbox-pi-agent",
+            "/run/slopbox-host-pi",
+            "/run/slopbox-clipboard"
+        ]
+        .iter()
+        .all(|root| !workspace.starts_with(root) && !Path::new(root).starts_with(workspace)),
+        "workspace overlaps sandbox control paths"
     );
     ensure!(
         !workspace.starts_with("/nix/store") && !Path::new("/nix/store").starts_with(workspace),
@@ -637,6 +662,11 @@ mod tests {
             );
             assert!(
                 arguments
+                    .windows(2)
+                    .any(|args| args == ["--remount-ro", "/"])
+            );
+            assert!(
+                arguments
                     .windows(3)
                     .any(|args| args == ["--ro-bind", "/host/workspace", "/workspace with spaces"])
             );
@@ -748,6 +778,24 @@ mod tests {
     }
 
     #[test]
+    fn workspaces_cannot_overlay_guest_control_paths() {
+        for path in [
+            "/run",
+            "/run/slopbox",
+            "/run/slopbox/bin",
+            "/run/slopbox-host/model",
+            "/run/slopbox-tool-home",
+            "/home/slopbox",
+        ] {
+            assert!(
+                validate_workspace_target(Path::new(path)).is_err(),
+                "{path}"
+            );
+        }
+        assert!(validate_workspace_target(Path::new("/run/my-project")).is_ok());
+    }
+
+    #[test]
     fn workspaces_cannot_make_the_runtime_store_writable() {
         for path in ["/", "/nix", "/nix/store", "/nix/store/package/project"] {
             assert!(
@@ -788,7 +836,7 @@ mod tests {
         let error = required_executor(directory.path().as_os_str()).unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains("bubblewrap is required on the host before launch"));
-        assert!(message.contains("nix develop -c ./target/debug/slopbox"));
+        assert!(message.contains("install the distro bubblewrap package"));
         assert!(message.contains("required executable bwrap"));
     }
 }

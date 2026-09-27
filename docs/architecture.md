@@ -4,7 +4,7 @@ The [project direction](direction.md) is authoritative. This document records ex
 
 Pi preparation, Linux execution, and the current providers are extracted. `harness/pi.rs` returns a typed harness plan. `session.rs` owns policy, workspace/stage state, brokers, and resource lifetimes. `backend/linux/` owns namespace construction, inner-tool enforcement, and the namespace probe. `backend/nix.rs` shares flake selection, realization and closure validation; each backend owns runtime grants and activation. Its execution plan borrows paths and selected broker endpoints, not live broker objects or credentials.
 
-The Linux runtime plan contains read-only paths, guest system links and PATH. The Nix-backed resolver produces those grants; the namespace launcher consumes them without selecting a host/project store mode or inspecting distro shell paths. This separates enforcement from NixOS layout, but does not yet discover dependencies for Nix-less installations.
+The Linux runtime plan contains read-only paths, guest system links and PATH. Nix closure resolution and opt-in ELF/script discovery produce this same plan; the launcher does not select a store mode or inspect distro shell paths. ELF metadata identifies dependencies but cannot authorize arbitrary host reads: user-installed dependencies need a host-owned prefix grant. Runtime-loaded resources remain separate, unresolved work.
 
 `provider/` owns OpenRouter credentials, Codex login/refresh/storage, fixed model routes, and upstream transport. The gateway delegates model connections; Pi receives only provider identifiers and emits its own synthetic credential markers. General and authenticated HTTP routes remain separate, using shared framing, address checks, and redaction in `http.rs`.
 

@@ -33,6 +33,7 @@ fn system_links(path: &OsStr) -> Result<Vec<(PathBuf, PathBuf)>> {
     let mut links = vec![
         ("/bin/sh".into(), find_executable("bash", path)?),
         ("/usr/bin/env".into(), find_executable("env", path)?),
+        ("/run/slopbox/bwrap".into(), find_executable("bwrap", path)?),
     ];
     if env::var_os("NIX_LD").is_some() {
         let loader = Path::new("/lib64/ld-linux-x86-64.so.2");
@@ -76,7 +77,15 @@ pub(crate) fn prepare_runtime(
     harness_executable: Option<&Path>,
     git_signing: bool,
     dry_run: bool,
+    selected: Option<RuntimePlan>,
 ) -> Result<RuntimePlan> {
+    if let Some(selected) = selected {
+        return Ok(selected);
+    }
+    ensure!(
+        env::split_paths(host_path).all(|path| path.starts_with("/nix/store")),
+        "Nix-free execution requires a host [runtime] executables selection"
+    );
     let mut system_links = system_links(host_path)?;
     if mode == RuntimeMode::Host {
         let profile = Path::new("/run/current-system/sw");

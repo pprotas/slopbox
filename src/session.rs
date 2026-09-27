@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -19,7 +19,9 @@ use crate::backend::native::{
     self, clone_or_copy_file, required_executor, sandbox_path, validate_workspace_contents,
 };
 use crate::backend::{self, BrokerConnections, ExecutionPlan, ProxyEndpoint, Workspace};
-use crate::command::{find_optional_executable, shell_quote};
+#[cfg(target_os = "linux")]
+use crate::command::find_optional_executable;
+use crate::command::shell_quote;
 use crate::fs_util::{expand_host_home, read_text, write_private};
 use crate::gateway::{AuthenticatedHttpRoute, GatewaySession, HttpAuthentication};
 use crate::git_config::GitUrlRewrite;
@@ -58,6 +60,8 @@ struct SlopboxConfig {
     policy: PolicyRequest,
     #[serde(default)]
     pi: pi::Config,
+    #[serde(default)]
+    runtime: Option<backend::RuntimeSelection>,
     #[serde(default)]
     secrets: HashMap<String, SecretConfig>,
     #[serde(default)]
@@ -168,6 +172,10 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     let paths = prepare_paths(options.workspace.as_deref())?;
     validate_workspace(&paths)?;
     let config = load_config(&paths.config_root)?;
+    ensure!(
+        options.launch_config.is_none() || config.runtime.is_none(),
+        "selected executable runtimes cannot replace an integrated Pi launch"
+    );
     let project_config = load_project_config(&paths.workspace)?;
     let launch_config = match options.launch_config {
         Some(config) => Some(config),
@@ -181,8 +189,22 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         launch_config.as_ref(),
     );
     policy.ensure_implemented(profile)?;
+    validate_runtime_selection(&config, policy)?;
+    #[cfg(target_os = "linux")]
+    if config.runtime.is_some() {
+        ensure!(
+            !backend::nix::enabled(&paths.workspace, options.dev_env)?,
+            "selected executable runtimes cannot activate a project flake; select the Nix runtime or use --dev-env none"
+        );
+    }
     let git_identity = configured_git_identity(&config, &paths.workspace)?;
     let git_rewrites = configured_git_rewrites(&config, &paths.workspace)?;
+    #[cfg(target_os = "linux")]
+    let selected_runtime = config
+        .runtime
+        .as_ref()
+        .map(|selection| native::elf::prepare(selection, &paths.workspace, git_identity.is_some()))
+        .transpose()?;
     #[cfg(target_os = "macos")]
     {
         native::validate(
@@ -344,7 +366,11 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         native: config.macos.as_ref(),
         session_dir: session_dir.path(),
         private_home: &paths.private_home,
-        host_path: &host_path,
+        host_path: if config.runtime.is_some() {
+            OsStr::new("")
+        } else {
+            &host_path
+        },
         profile,
         general_network,
         tool_network: network.tool,
@@ -367,6 +393,8 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         options.dry_run,
         #[cfg(target_os = "macos")]
         &paths.workspace,
+        #[cfg(target_os = "linux")]
+        selected_runtime,
     )?;
     let mut clipboard = if cfg!(target_os = "linux")
         && private_terminal
@@ -375,7 +403,12 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     {
         Some(crate::clipboard::Clipboard::new(
             session_dir.path().join("clipboard"),
-            find_optional_executable("wl-paste", &host_path),
+            crate::command::trusted_executable(
+                "wl-paste",
+                #[cfg(target_os = "macos")]
+                &paths.workspace,
+            )
+            .ok(),
         )?)
     } else {
         None
@@ -566,7 +599,9 @@ pub fn doctor(
             "Host config {}",
             paths.config_root.join("config.toml").display()
         ),
-        if launch.is_some() {
+        if config.runtime.is_some() {
+            "Setup: not needed for explicit run commands; Pi default launch is unavailable".into()
+        } else if launch.is_some() {
             "Setup: saved host-side policy applies".into()
         } else {
             "Setup: not initialized; run slopbox in a host terminal or use slopbox init".into()
@@ -577,6 +612,7 @@ pub fn doctor(
             "Policy",
             policy
                 .ensure_implemented(profile)
+                .and_then(|()| validate_runtime_selection(&config, policy))
                 .map(|()| format!("{profile}; effective policy supported")),
         ),
         (
@@ -626,7 +662,14 @@ pub fn doctor(
             }),
         ),
     ];
-    native::diagnostics::check(&paths.workspace, policy, &mut checks, &mut lines);
+    native::diagnostics::check(
+        &paths.workspace,
+        policy,
+        &mut checks,
+        &mut lines,
+        #[cfg(target_os = "linux")]
+        config.runtime.as_ref(),
+    );
     let mut failures = 0;
     for (name, result) in checks {
         match result {
@@ -670,6 +713,24 @@ fn check_model_configuration(paths: &Paths, policy: Policy) -> Result<String> {
     ))
 }
 
+fn validate_runtime_selection(config: &SlopboxConfig, policy: Policy) -> Result<()> {
+    if config.runtime.is_some() {
+        ensure!(
+            cfg!(target_os = "linux"),
+            "selected executable runtimes are currently implemented on Linux only"
+        );
+        ensure!(
+            policy.runtime == RuntimeMode::Host,
+            "selected executable runtimes require runtime=host; no fallback from a project or image runtime"
+        );
+        ensure!(
+            policy.harness == HarnessMode::None,
+            "selected executable runtimes require harness=none; integrated Pi separation is not enabled implicitly"
+        );
+    }
+    Ok(())
+}
+
 fn describe_status(
     paths: &Paths,
     config: &SlopboxConfig,
@@ -688,7 +749,11 @@ fn describe_status(
     let rewrites = configured_git_rewrites(config, &paths.workspace)?;
     let mut lines = vec![
         format!("Project       {}", paths.workspace.display()),
-        "Agent         Pi".into(),
+        if config.runtime.is_some() {
+            "Execution     Generic commands; no automatic harness/tool separation".into()
+        } else {
+            "Agent         Pi".into()
+        },
         format!(
             "Default env   {}",
             native::diagnostics::environment_description(&paths.workspace)
@@ -704,7 +769,11 @@ fn describe_status(
         ),
         format!(
             "Host tools    {}",
-            native::diagnostics::runtime_description(policy.runtime)
+            if config.runtime.is_some() {
+                "Explicit host executables and discovered files only; read-only"
+            } else {
+                native::diagnostics::runtime_description(policy.runtime)
+            }
         ),
         format!(
             "Internet      {}",
@@ -836,7 +905,8 @@ fn describe_status(
     ));
     let supported = policy
         .ensure_implemented(profile)
-        .and_then(|()| backend::ensure_supported());
+        .and_then(|()| backend::ensure_supported())
+        .and_then(|()| validate_runtime_selection(config, policy));
     #[cfg(target_os = "macos")]
     let supported = supported
         .and_then(|()| native::validate_policy(policy))
@@ -902,6 +972,21 @@ fn describe_status(
                 crate::launch::config_path(&paths.config_root, &paths.workspace).display()
             ),
         ]);
+        if let Some(runtime) = &config.runtime {
+            lines.push("runtime-source: host runtime.executables".into());
+            lines.push(
+                "runtime-infrastructure: slopbox, bash, bwrap, env; ssh-keygen when signing".into(),
+            );
+            for executable in &runtime.executables {
+                lines.push(format!("runtime-executable: {}", executable.display()));
+            }
+            for root in &runtime.dependency_roots {
+                lines.push(format!(
+                    "runtime-dependency-root: {} (discovered files only)",
+                    root.display()
+                ));
+            }
+        }
         for (source, target) in resources.mounts {
             lines.push(format!(
                 "read-only-mount: {} -> {}",
@@ -941,6 +1026,10 @@ pub fn init_project(
     validate_workspace(&paths)?;
     let config = load_config(&paths.config_root)?;
     let project = load_project_config(&paths.workspace)?;
+    ensure!(
+        config.runtime.is_none(),
+        "selected executable runtimes do not provide Pi project setup; use slopbox run -- COMMAND"
+    );
     let previous = crate::launch::load(&paths.config_root, &paths.workspace)?;
     let (profile, mut policy) = select_policy(&config, &project, None, no_host_pi_resources, None);
     policy.ensure_implemented(profile)?;
@@ -1004,6 +1093,10 @@ pub fn launch(agent_arguments: Vec<OsString>, approval_view: bool) -> Result<Exi
     backend::ensure_supported()?;
     let paths = prepare_paths(None)?;
     validate_workspace(&paths)?;
+    ensure!(
+        load_config(&paths.config_root)?.runtime.is_none(),
+        "selected executable runtimes do not provide integrated Pi launch; use slopbox run -- COMMAND"
+    );
     let (launch, initialized) = match crate::launch::load(&paths.config_root, &paths.workspace)? {
         Some(config) => (config, false),
         None => (

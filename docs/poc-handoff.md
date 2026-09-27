@@ -16,8 +16,8 @@ macOS and Linux unit tests, TLS/client tests, strict Clippy and formatting pass.
 
 ## Linux runtime follow-up
 
-[Portable Nix-backed Linux](poc-linux-runtime.md) removes NixOS layout assumptions. The runtime resolver now supplies explicit read-only paths, guest links and PATH to enforcement. Stock Ubuntu with single-user Nix passed the full suite without host-system-link or Nix-configuration changes. Nix-less runtime discovery is still separate work.
+[Portable Nix-backed Linux](poc-linux-runtime.md) removes NixOS layout assumptions. The runtime resolver now supplies explicit read-only paths, guest links and PATH to enforcement. Stock Ubuntu with single-user Nix passed the full suite without host-system-link or Nix-configuration changes. The [Nix-free follow-up](poc-nixless-linux.md) adds host-selected ELF/script discovery using that same plan, without ambient `/usr` or home mounts.
 
 ## Subsequent work
 
-Bare launch still initializes each project. Generic runtime discovery, arbitrary native command launch, additional model protocols and production TLS rollout remain outside this POC. The one-day session CA has no renewal, mediated uploads require Content-Length, and pinned or proxy-ignoring clients are not supported by this experiment. Do not weaken enforcement to accommodate them.
+Bare Pi launch still initializes each project. Nix-free explicit commands need no project setup, but do not provide integrated Pi launch. Dynamic runtime/resource discovery, arbitrary macOS command launch, additional model protocols and production TLS rollout remain outside these slices. The one-day session CA has no renewal, mediated uploads require Content-Length, and pinned or proxy-ignoring clients are not supported by this experiment. Do not weaken enforcement to accommodate them.

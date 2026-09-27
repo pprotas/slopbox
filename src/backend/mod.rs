@@ -57,6 +57,15 @@ pub(crate) struct PreparedDevEnvironment {
     pub store_paths: Vec<PathBuf>,
 }
 
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeSelection {
+    #[serde(default)]
+    pub executables: Vec<PathBuf>,
+    #[serde(default)]
+    pub dependency_roots: Vec<PathBuf>,
+}
+
 pub(crate) struct RuntimePlan {
     #[cfg(target_os = "macos")]
     pub native: macos::runtime::NativeRuntime,

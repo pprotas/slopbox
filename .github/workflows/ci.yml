@@ -46,6 +46,28 @@ jobs:
       - run: nix build -L
       - run: nix flake check --no-build --all-systems
 
+  e2e-nixless:
+    name: Linux enforcement (without Nix)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install distro dependencies
+        run: |
+          test ! -e /nix
+          sudo apt-get update
+          sudo apt-get install -y build-essential bubblewrap curl git cmake pkg-config openssh-client openssl python3
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked --all-targets
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo build --locked
+      - run: python3 tests/linux-nixless.py target/debug/slopbox
+
   e2e-host:
     name: Linux enforcement (Ubuntu with Nix)
     runs-on: ubuntu-22.04

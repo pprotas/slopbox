@@ -1,7 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-#[cfg(target_os = "macos")]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -31,7 +30,7 @@ pub(crate) fn trusted_executable(
     let path = env::var_os("PATH").context("PATH is not set")?;
     #[cfg(target_os = "linux")]
     {
-        nix_executable(name, &path)
+        host_executable(name, &path)
     }
     #[cfg(target_os = "macos")]
     native_executable(
@@ -68,6 +67,50 @@ pub(crate) fn nix_executable(name: &str, path: &OsStr) -> Result<PathBuf> {
         }
     }
     bail!("required host executable {name} is not available in a trusted Nix PATH entry")
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn host_executable(name: &str, path: &OsStr) -> Result<PathBuf> {
+    if let Ok(executable) = nix_executable(name, path) {
+        return Ok(executable);
+    }
+    for directory in env::split_paths(path).filter(|path| path.is_absolute()) {
+        if let Ok(executable) = protected_system_executable(&directory.join(name)) {
+            return Ok(executable);
+        }
+    }
+    bail!(
+        "required host executable {name} needs a Nix package or a protected root-owned installation"
+    )
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn protected_system_path(path: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+
+    anyhow::ensure!(path.is_absolute(), "host helper path must be absolute");
+    let canonical = path.canonicalize()?;
+    for ancestor in path.ancestors().chain(canonical.ancestors()) {
+        let metadata = fs::metadata(ancestor)?;
+        anyhow::ensure!(
+            metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
+            "host helper has unprotected ancestry: {}",
+            ancestor.display()
+        );
+    }
+    Ok(canonical)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn protected_system_executable(path: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let canonical = protected_system_path(path)?;
+    let metadata = fs::metadata(&canonical)?;
+    anyhow::ensure!(
+        metadata.is_file() && metadata.mode() & 0o111 != 0,
+        "host helper is not an executable regular file"
+    );
+    Ok(canonical)
 }
 
 #[cfg(target_os = "macos")]
@@ -132,6 +175,19 @@ pub(crate) fn find_optional_executable(name: &str, path: &OsStr) -> Option<PathB
 mod linux_tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn system_helpers_reject_mutable_ancestry_and_non_executable_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("helper");
+        fs::write(&executable, "#!/bin/sh\nexit 99\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(protected_system_executable(&executable).is_err());
+        symlink("/usr/bin/env", root.path().join("alias")).unwrap();
+        assert!(protected_system_executable(&root.path().join("alias")).is_err());
+        assert!(protected_system_executable(Path::new("/")).is_err());
+        assert!(protected_system_path(Path::new(".")).is_err());
+    }
 
     #[test]
     fn host_helpers_reject_executables_and_symlinks_outside_the_store() {

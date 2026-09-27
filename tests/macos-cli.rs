@@ -394,6 +394,26 @@ fn configured_launch_rejects_unsupported_capabilities_before_resolving_secrets()
 }
 
 #[test]
+fn selected_linux_runtime_is_not_silently_ignored_on_macos() {
+    let fixture = Fixture::new();
+    fixture.configure_native();
+    let path = fixture.root.path().join("config/slopbox/config.toml");
+    let mut config = fs::read_to_string(&path).unwrap();
+    config.push_str("\n[runtime]\nexecutables = [\"curl\"]\n");
+    fs::write(path, config).unwrap();
+    let output = fixture
+        .command()
+        .args(["run", "--dev-env", "none", "--", "pi"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("implemented on Linux only"), "{error}");
+    assert!(!error.contains("SLOPBOX_MISSING_SECRET"), "{error}");
+    fixture.assert_untouched();
+}
+
+#[test]
 fn unsupported_native_resources_are_reported_before_secrets_or_state_changes() {
     for (resource, expected) in [
         (

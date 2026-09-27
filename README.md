@@ -2,7 +2,7 @@
 
 Slopbox runs coding agents with explicit access to project files, tools, networks, and external accounts. It keeps host credentials outside the agent and records network access that needs human approval.
 
-The current alpha supports Nix-backed Linux with Pi, using native `developer` and `contained` profiles. It has been tested on NixOS and on [stock Ubuntu with Nix](docs/poc-linux-runtime.md); Linux without Nix remains planned. An [experimental native macOS launcher](docs/macos.md) supports explicitly selected Pi/Node and sandboxed bash, not the full Linux feature set. Each backend must independently satisfy its declared security contract.
+The current alpha supports Nix-backed Linux with Pi, using native `developer` and `contained` profiles, tested on NixOS and [Ubuntu with Nix](docs/poc-linux-runtime.md). An opt-in [Nix-free Linux runtime](docs/poc-nixless-linux.md) runs selected ELF executables and scripts; it does not infer arbitrary language environments or harness integration. An [experimental native macOS launcher](docs/macos.md) supports explicitly selected Pi/Node and sandboxed bash, not the full Linux feature set. Each backend must independently satisfy its declared security contract.
 
 ## What it does
 
@@ -12,7 +12,7 @@ A Slopbox session can provide:
 - live, read-only, or staged access to one project;
 - a private home and package caches;
 - concurrent sessions with per-run generated configuration and shared project history;
-- a host or project-selected Nix runtime;
+- a Nix runtime or explicitly selected Linux executable dependencies;
 - deny-by-default HTTP and HTTPS networking;
 - host-approved session and project destinations;
 - fixed authenticated routes whose real credentials never enter the sandbox;
@@ -72,7 +72,7 @@ nix run . -- stage discard <stage-id>
 
 Add `git_urls` to an authenticated route to use ordinary Git commands through the broker without changing `.git/config`; see [configuration](docs/configuration.md#git-smart-http).
 
-The basic `cd project && slopbox` workflow and revocable network rules are implemented for Pi. The host approval view remains opt-in; native approval and actual-Pi terminal fixtures have passed on Apple Silicon/macOS 27. Nix-less Linux runtimes, broader macOS tooling and additional harness/provider integrations remain planned.
+The basic `cd project && slopbox` workflow and revocable network rules are implemented for Pi. The host approval view remains opt-in; native approval and actual-Pi terminal fixtures have passed on Apple Silicon/macOS 27. Broader runtime/resource discovery, macOS tooling and additional harness/provider integrations remain planned.
 
 ## Documentation
 
@@ -100,7 +100,7 @@ nix flake check
 nix run .#e2e
 ```
 
-`nix run .#e2e` runs directly on Nix-backed Linux and requires working outer/nested user namespaces. The app supplies its test tools, including Pi. It validates direct and contained runtime paths, with either single-user Nix or a daemon, without making a model request. CI has separate Ubuntu-host and NixOS-VM jobs; the latter requires KVM.
+`nix run .#e2e` runs directly on Nix-backed Linux and requires working outer/nested user namespaces. The app supplies its test tools, including Pi. It validates direct and contained runtime paths, with either single-user Nix or a daemon, without making a model request. CI has separate Ubuntu-host and NixOS-VM jobs; the latter requires KVM. The Nix-free job instead builds with distro tools and runs `python3 tests/linux-nixless.py target/debug/slopbox` on a host without `/nix`.
 
 With direnv/nix-direnv configured on the host, review `.envrc` and run `direnv allow` to activate the development shell automatically.
 

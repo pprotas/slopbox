@@ -31,7 +31,7 @@ pub fn from_command(
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
             && arguments.iter().all(|argument| !argument.contains('\0')),
-        "secret command requires a packaged executable name and valid arguments"
+        "secret command requires a trusted helper name and valid arguments"
     );
     let executable = trusted_executable(
         program,

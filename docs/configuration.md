@@ -12,7 +12,7 @@ or, when `XDG_CONFIG_HOME` is unset:
 ~/.config/slopbox/config.toml
 ```
 
-This file is policy authority. Do not place it inside the project. Identities and accounts can use [shared defaults and directory rules](#shared-host-defaults-and-directory-rules); legacy workspace bindings remain supported. Generic runtime discovery remains subsequent work under the [authoritative project direction](direction.md).
+This file is policy authority. Do not place it inside the project. Identities and accounts can use [shared defaults and directory rules](#shared-host-defaults-and-directory-rules); legacy workspace bindings remain supported. Linux also supports [host-selected executables without Nix](#selected-linux-executables-without-nix), following the [authoritative project direction](direction.md).
 
 ## Project setup and launch
 
@@ -59,7 +59,7 @@ The profile supplies defaults. Host policy, the saved project setup, and reposit
 
 `network = "none"` disables general egress, not fixed model or configured authenticated account routes. `credentials = "none"` disables model routes; it does not disable account routes or Git signing. Likewise, `--tool-network=none` leaves configured authenticated account routes available to project commands. These settings alone must not be described as an offline session.
 
-The developer runtime exposes the host Nix store read-only, and selected Pi resources may expose other host data. Limiting project writes does not mean that only project files are readable.
+The default Nix-backed developer runtime exposes the host Nix store read-only, and selected Pi resources may expose other host data. Limiting project writes does not mean that only project files are readable.
 
 Online `developer` sessions let Pi refresh model catalogs through the ordinary deny-by-default gateway. Approve the catalog destination, then reopen `/model` or run `pi update --models`. Stricter profiles keep Pi's catalog and package refresh logic offline.
 
@@ -73,6 +73,26 @@ network = "none"
 ```
 
 Project policy cannot grant capabilities beyond the host ceiling.
+
+## Selected Linux executables without Nix
+
+This opt-in host setting replaces the ambient Nix runtime with selected executables and their discovered dependencies:
+
+```toml
+[policy]
+harness = "none"
+network = "none"
+credentials = "none"
+
+[runtime]
+executables = ["curl", "git"]
+```
+
+Use `slopbox run --dev-env none -- COMMAND`; this mode does not provide Pi default launch/setup. `runtime=project` and contained profiles do not fall back to it. Model/account/signing authority remains governed independently.
+
+Names select protected host installations. Absolute and `~/` executable paths select user installations; authorize their dependency prefix with `dependency_roots = ["~/.local/tools/example"]`. Only discovered files are mounted, not whole prefixes. Repository configuration cannot declare either field. `status --verbose` reports the host selection without running discovery or resolving secrets.
+
+See [installation, validation and limits](poc-nixless-linux.md). This is native ELF and basic script discovery, not automatic plugin, language-package or application-data imports. Generic execution does not imply harness/tool separation.
 
 ## Pi resources
 
@@ -119,7 +139,7 @@ file = "/absolute/path/outside/project/secrets.yaml"
 key = '["FORGE_TOKEN"]'
 ```
 
-A relative SOPS file path is resolved against the workspace associated with the route that uses it. The SOPS executable and identity stay host-side. Decrypted values are retained only in supervisor memory. Linux requires both the PATH directory and executable to resolve into the Nix store; macOS also accepts executable files in recognized Homebrew Cellar packages, rejecting installations that overlap the workspace. No SOPS identity or additional filesystem grant is passed to either sandbox role.
+A relative SOPS file path is resolved against the workspace associated with the route that uses it. The SOPS executable and identity stay host-side. Decrypted values are retained only in supervisor memory. Linux accepts Nix-store helpers or root-owned system executables whose complete ancestry is not group/world-writable; a selected guest executable is not thereby a host helper. macOS accepts Nix-store and recognized Homebrew Cellar executables, rejecting installations that overlap the workspace. No SOPS identity or additional filesystem grant is passed to either sandbox role.
 
 ## Authenticated HTTP routes
 
