@@ -13,10 +13,10 @@ executables = ["~/.local/bin/example", "cat", "uname"]
 ```
 
 ```sh
-slopbox run --dev-env none -- example --version
+slopbox run -- example --version
 ```
 
-This selection takes precedence over the legacy `[macos]` Pi runtime. It requires a non-root user, `runtime=host`, `harness=none`, and no project-flake activation. Bare Pi launch/setup is not provided by this mode. Repository configuration cannot select executables or broaden grants.
+This selection takes precedence over the legacy `[macos]` Pi runtime. It requires a non-root user, `runtime=host`, `harness=none`, and no project-flake activation. Automatic development-environment selection does not activate a project flake in this mode. Host `default_command` enables bare launch through the same execution path; built-in Pi setup is not provided. Host `[environment]` can configure literal client settings and expand public session paths/endpoints. Repository configuration cannot select executables, environment values or broader grants.
 
 ## Runtime boundary
 
@@ -38,7 +38,7 @@ Home-scoped socket path grants were rejected during enforcement testing: a host 
 
 Generic commands and their subprocesses share the outer role's authority. They can use every attached account route and any enabled model route. Native generic mode does not supply `tool-run` or automatic harness/tool separation. The existing Pi adapter retains its separate tool role.
 
-On Apple silicon/macOS 27, the production launcher passes `tests/native/generic.py`: selected Node execution, read-only installation and workspace enforcement, blocked credential/configuration reads, unselected execution, host-socket denial after symlinks/hard links/renames, direct-network denial, within-role child termination, denied host signalling and exit-status propagation. Persistence checks cover repeated launches, cross-workspace read denial, fresh temporary storage, home-root rename denial and guest state symlinks that must not redirect host initialization.
+On Apple silicon/macOS 27, the production launcher passes `tests/native/generic.py`: selected Node execution, read-only installation and workspace enforcement, blocked credential/configuration reads, unselected execution, host-socket denial after symlinks/hard links/renames, direct-network denial, within-role child termination, denied host signalling and exit-status propagation. Persistence checks cover repeated launches, cross-workspace read denial, fresh temporary storage, home-root rename denial and guest state symlinks that must not redirect host initialization. Further regressions cover default-command launch, environment expansion without shell evaluation, ignoring an invalid project flake under a selected runtime, and stdout redirected outside the workspace: descriptor metadata succeeds while reopening the output path for reading or writing stays denied.
 
 The shared [Claude Code fixture](poc-claude-code.md) also passes with the unmodified native release: streaming, Read/Edit/Bash and broker/isolation probes in two unrelated workspaces. The deterministic fixture uses disposable credentials. A separate opt-in [live OpenRouter/Haiku test](poc-claude-code.md#live-openrouter-acceptance) also passes with the production package; an additional terminal test validates typed input, clean exit/terminal restoration and conversation resume across separate Slopbox runs. Subscription authentication remains unvalidated. Claude reports cross-session messaging unavailable because named IPC stays blocked.
 

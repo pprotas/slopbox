@@ -47,13 +47,21 @@ with tempfile.TemporaryDirectory(
         "PATH": "/usr/bin:/bin",
         "HOST_CANARY": "must-not-enter",
     }
-    config.write_text(f"""[policy]
+    config.write_text(f"""default_command=["node"]
+[environment]
+CLIENT_HOME="${{HOME}}"
+CLIENT_TEMP="${{TMPDIR}}"
+CLIENT_LITERAL="$(false)"
+[policy]
 network="none"
 credentials="none"
 harness="none"
 [runtime]
 executables=[{json.dumps(str(root / "tools" / node.name))}]
 """)
+    (root / "workspace/flake.nix").write_text(
+        "This must never be evaluated by an explicit host runtime."
+    )
     (root / "workspace/escape").symlink_to(secret)
     (root / "workspace/unselected").symlink_to("/bin/echo")
     (root / "workspace/probe.mjs").write_text("""
@@ -64,6 +72,9 @@ import {once} from 'node:events';
 import * as net from 'node:net';
 import path from 'node:path';
 const fixture = JSON.parse(fs.readFileSync('fixture.json'));
+assert.equal(process.env.CLIENT_HOME, process.env.HOME);
+assert.equal(process.env.CLIENT_TEMP, process.env.TMPDIR);
+assert.equal(process.env.CLIENT_LITERAL, '$(false)');
 for (const file of [fixture.secret, fixture.config, 'escape']) {
   assert.throws(() => fs.readFileSync(file), {code:'EPERM'});
 }
@@ -168,7 +179,7 @@ console.log('generic-native-passed');
     publisher.start()
     try:
         result = subprocess.run(
-            [str(binary), "run", "--dev-env", "none", "--", "node", "probe.mjs"],
+            [str(binary), "--", "probe.mjs"],
             check=False,
             env=env,
             cwd=root / "workspace",
@@ -268,6 +279,34 @@ console.log('generic-native-passed');
             timeout=60,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+        redirected = root / "redirected.log"
+        with redirected.open("w") as output:
+            result = subprocess.run(
+                [
+                    str(binary),
+                    "run",
+                    "--",
+                    "node",
+                    "-e",
+                    (
+                        "const fs=require('node:fs'),assert=require('node:assert/strict');"
+                        "assert(fs.fstatSync(1).isFile());"
+                        f"assert.throws(() => fs.readFileSync({json.dumps(str(redirected))}), {{code:'EPERM'}});"
+                        f"assert.throws(() => fs.openSync({json.dumps(str(redirected))}, 'w'), {{code:'EPERM'}});"
+                        "console.log('redirected-stdio-passed');"
+                    ),
+                ],
+                check=False,
+                env=env,
+                cwd=other,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+            )
+        assert result.returncode == 0, result.stderr
+        assert redirected.read_text() == "redirected-stdio-passed\n"
         node.chmod(0o4755)
         assert node.stat().st_mode & 0o4000
         result = subprocess.run(
@@ -288,6 +327,9 @@ console.log('generic-native-passed');
         )
         print("PASS: read-only workspace and command exit-status propagation")
         print("PASS: persistent per-workspace home and private temporary storage")
+        print(
+            "PASS: default command, private environment expansion and no implicit flake activation"
+        )
     finally:
         stop.set()
         publisher.join(timeout=2)

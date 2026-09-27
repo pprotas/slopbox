@@ -1,6 +1,6 @@
 [package]
 name = "slopbox"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 edition = "2024"
 description = "A development sandbox for coding agents"
 
@@ -26,4 +26,5 @@ url = "2.5"
 goblin = { version = "0.10.7", default-features = false, features = ["std", "elf32", "elf64", "endian_fd"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
 goblin = { version = "0.10.7", default-features = false, features = ["std", "mach32", "mach64", "endian_fd"] }

@@ -82,6 +82,8 @@ Each Nix profile root lives in the native session's control directory. Successfu
 
 ## Native macOS generic commands
 
+For noninteractive generic execution, explicitly inherited regular standard files receive literal metadata-only grants so applications can inspect their own descriptors. This does not grant path-based read/write access to those files or their directories. Host-owned guest environment configuration expands only public broker values and private HOME/TMPDIR, not host environment variables or secrets. The native Keychain secret source runs in the host coordinator; it adds no guest Keychain access.
+
 Host-owned `[runtime].executables` also supports generic native commands without Pi configuration. This requires `runtime=host`, `harness=none` and no project activation. Discovery validates native Mach-O/system-library dependencies and simple bash/sh scripts without executing them. Bundles, dependency roots and non-system dylibs are rejected. The existing launchd/coalition ownership, broker leases, descriptor handling and cleanup remain in use.
 
 Selected files receive literal read and execution grants, with ancestor metadata only. Execution permission is enforced separately from reading: an unreadable but unselected executable must not become executable. Workspace/private-home/private-temporary code may execute. The existing native system-library/locale base remains available, with protected system ICU data files granted literally and read-only. Workspace/credential/control overlaps, non-system hard-link aliases and setuid/setgid selections are rejected; host installation stability remains a prerequisite.

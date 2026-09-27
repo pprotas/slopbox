@@ -14,15 +14,43 @@ or, when `XDG_CONFIG_HOME` is unset:
 
 This file is policy authority. Do not place it inside the project. Identities and accounts can use [shared defaults and directory rules](#shared-host-defaults-and-directory-rules); legacy workspace bindings remain supported. Linux also supports [host-selected executables without Nix](#selected-linux-executables-without-nix), following the [authoritative project direction](direction.md).
 
-## Project setup and launch
+## Command launch
 
-From a host terminal in the project:
+Use `slopbox run -- COMMAND` without project setup. A host default makes bare `slopbox` use the same execution path:
+
+```toml
+default_command = ["bash"]
+
+[policy]
+harness = "none"
+credentials = "none"
+
+[runtime]
+executables = ["bash", "cat", "ls"]
+```
+
+`slopbox -- ARGS` appends literal arguments to `default_command`. Neither command nor environment configuration is accepted from repository policy. Existing saved policy ceilings still apply. Generic subprocesses share the outer role's authority; this does not enable automatic tool/model separation.
+
+Selected runtimes may also use host-configured guest environment values:
+
+```toml
+[environment]
+CLIENT_BASE_URL = "${SLOPBOX_AUTHENTICATED_HTTP_BASE_URL}/example"
+CLIENT_AUTH_TOKEN = "slopbox:example"
+CLIENT_STATE = "${HOME}/client"
+```
+
+The example requires an attached account route. `${NAME}` expands only public session broker variables, `HOME` and `TMPDIR`; it never reads ambient host variables or named secrets. Missing references fail. Other text, including `$()` and unbraced `$NAME`, stays literal. Values are not recursively expanded. Use this for client settings and placeholders, not real credentials. Managed home/path/proxy/Git/Slopbox variables cannot be overridden. Input and expanded environments are bounded to 64 KiB; inspection lists names without values.
+
+## Legacy Pi setup
+
+Without `default_command` or an explicit runtime selection, the older built-in Pi launch remains during migration. From a host terminal in the project:
 
 ```bash
 slopbox
 ```
 
-The first launch asks whether project changes should be immediate, staged for review, or read-only. Pi is currently the only supported default agent. Slopbox shows the resulting access and saves it only after an explicit confirmation. Later launches reuse the saved policy and print the access summary before starting Pi.
+The first launch asks whether project changes should be immediate, staged for review, or read-only. This legacy setup only supports Pi. Slopbox shows the resulting access and saves it only after an explicit confirmation. Later launches reuse the saved policy and print the access summary before starting Pi.
 
 Pass Pi arguments after `--`, or reconfigure without launching:
 
@@ -106,7 +134,7 @@ See [executable limits](poc-nixless-linux.md) and [bundle behavior and non-Pi ha
 
 ## Selected native macOS executables
 
-The same host-owned `[runtime].executables` selection supports generic native commands without `[macos]` Pi/Node configuration. It requires `runtime=host`, `harness=none` and `--dev-env none` when a project has a flake. Bare names select system commands; other installations need absolute or `~/` paths.
+The same host-owned `[runtime].executables` selection supports generic native commands without `[macos]` Pi/Node configuration. It requires `runtime=host` and `harness=none`. An explicit runtime selection makes `--dev-env auto` use those host resources without evaluating a project flake; an explicit `--dev-env flake` remains an error. Bare names select system commands; other installations need absolute or `~/` paths.
 
 This native slice accepts host-architecture Mach-O executables using system libraries and simple bash/sh scripts. `bundles`, `dependency_roots` and non-system dylibs are rejected rather than ignored. Generic subprocesses retain outer account/model authority; there is no native `tool-run` role in this mode. See [runtime grants and limitations](poc-native-runtime.md).
 
@@ -127,6 +155,17 @@ Read-only mounts expose host data without allowing changes. Temporary overlays u
 Targets are restricted to sandbox cache, configuration, and data directories. Slopbox rejects known credential roots and resource trees containing Unix sockets. These mounts are disabled when host Pi resources are disabled.
 
 ## Secrets
+
+On macOS, a host-owned route can use an exact generic-password item from the host's default Keychain search list:
+
+```toml
+[secrets.example]
+source = "keychain"
+service = "my-service"
+account = "my-account"
+```
+
+Lookup happens only on the host when an attached route starts. Slopbox does not export the password, change Keychain permissions, or grant guests Keychain services. Inspection does not read the item. Keychain sources fail explicitly on other platforms.
 
 Environment-backed secrets are useful for bootstrap and testing:
 
@@ -222,7 +261,7 @@ accounts = []
 
 Both `~/Projects/first` and `~/Work/second` select the same definitions without repository configuration. Directory rules match canonical directory trees and apply broadest first, regardless of declaration order. An omitted setting inherits; `git_identity = false` disables signing and `accounts = []` disables accounts. Account lists replace rather than append. Equally specific overlapping rules fail closed.
 
-Existing `workspace` bindings remain exact-workspace ceilings even when selected by name. Without an explicit selection, legacy workspace-bound entries still activate; unbound entries do not. Unknown selections fail before resolving secrets. Repository `.slopbox.toml` cannot define these grants. `slopbox status --verbose` shows selected access, matching host rule indexes, and each selection's source (defaults, directory rule or legacy binding) without resolving secrets. Bare launch still requires per-project initialization.
+Existing `workspace` bindings remain exact-workspace ceilings even when selected by name. Without an explicit selection, legacy workspace-bound entries still activate; unbound entries do not. Unknown selections fail before resolving secrets. Repository `.slopbox.toml` cannot define these grants. `slopbox status --verbose` shows selected access, matching host rule indexes, and each selection's source (defaults, directory rule or legacy binding) without resolving secrets. A configured `default_command` uses ordinary execution without project initialization; legacy implicit Pi launch still requires setup.
 
 ### Experimental shared HTTPS transport
 
@@ -422,7 +461,7 @@ slopbox run --dry-run -- /bin/sh
 
 Inspection does not decrypt secrets, load signing keys, evaluate Nix environments, contact providers, or create project state. Provider entries report configuration presence, not valid credentials. This is a launch-policy summary, not a claim about the state or readiness of an already-running session.
 
-`policy` remains available for raw policy axes, route names, Git URL mappings, and identity. `--dry-run` prints the native backend command without starting it. The default-environment row describes automatic launch: a project `flake.nix` is evaluated and built on the host before its environment is activated in the sandbox.
+`policy` remains available for raw policy axes, route names, Git URL mappings, and identity. `--dry-run` prints the native backend command without starting it. The default-environment row describes automatic launch. An explicit runtime selection disables implicit flake activation. Otherwise, a project `flake.nix` is evaluated and built on the host before its environment is activated in the sandbox.
 
 ### Diagnose launch problems
 

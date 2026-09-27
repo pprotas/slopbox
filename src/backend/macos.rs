@@ -358,6 +358,9 @@ impl Session {
                 "SHELL=/bin/bash".into(),
                 "SLOPBOX_SANDBOX=1".into(),
             ]);
+            if generic {
+                values.push("GIT_CONFIG_NOSYSTEM=1".into());
+            }
             let gitconfig = plan.session_dir.join("gitconfig");
             if gitconfig.is_file() {
                 values.retain(|value| {

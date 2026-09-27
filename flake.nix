@@ -28,7 +28,7 @@
           default = slopbox;
           slopbox = pkgs.rustPlatform.buildRustPackage {
             pname = "slopbox";
-            version = "0.1.0";
+            version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
             src = lib.cleanSource ./.;
             cargoLock.lockFile = ./Cargo.lock;
             env = lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin darwinRustEnv;

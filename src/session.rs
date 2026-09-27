@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder, OpenOptions};
@@ -62,6 +62,9 @@ struct SlopboxConfig {
     pi: pi::Config,
     #[serde(default)]
     runtime: Option<backend::RuntimeSelection>,
+    default_command: Option<Vec<String>>,
+    #[serde(default)]
+    environment: BTreeMap<String, String>,
     #[serde(default)]
     secrets: HashMap<String, SecretConfig>,
     #[serde(default)]
@@ -97,6 +100,7 @@ enum SecretConfig {
     Sops { file: PathBuf, key: String },
     Environment { variable: String },
     Command { argv: Vec<String> },
+    Keychain { service: String, account: String },
 }
 
 #[derive(Deserialize)]
@@ -190,9 +194,19 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     );
     policy.ensure_implemented(profile)?;
     validate_runtime_selection(&config, policy)?;
+    crate::guest_environment::validate(&config.environment)?;
+    ensure!(
+        config.environment.is_empty() || config.runtime.is_some(),
+        "guest environment configuration requires a selected executable runtime"
+    );
+    let dev_env = if config.runtime.is_some() && matches!(options.dev_env, DevEnvironment::Auto) {
+        DevEnvironment::None
+    } else {
+        options.dev_env
+    };
     if config.runtime.is_some() {
         ensure!(
-            !backend::nix::enabled(&paths.workspace, options.dev_env)?,
+            !backend::nix::enabled(&paths.workspace, dev_env)?,
             "selected executable runtimes cannot activate a project flake; select the Nix runtime or use --dev-env none"
         );
     }
@@ -218,7 +232,7 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
             &paths.workspace,
             policy,
             &options.command,
-            options.dev_env,
+            dev_env,
             options.dry_run,
         )?;
     }
@@ -303,7 +317,7 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     let dev_environment = if options.dry_run {
         None
     } else {
-        prepare_dev_environment(session_dir.path(), &workspace_mount.source, options.dev_env)?
+        prepare_dev_environment(session_dir.path(), &workspace_mount.source, dev_env)?
     };
 
     let git_signing = if options.dry_run {
@@ -352,11 +366,8 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         (session, brokers)
     };
     #[cfg(target_os = "macos")]
-    let dev_environment = prepare_dev_environment(
-        native_session.directory(),
-        &workspace_mount.source,
-        options.dev_env,
-    )?;
+    let dev_environment =
+        prepare_dev_environment(native_session.directory(), &workspace_mount.source, dev_env)?;
     if !options.dry_run && (git_signing.is_some() || !git_rewrites.is_empty()) {
         let broker_base = brokers
             .authenticated_http
@@ -454,6 +465,50 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
             PathBuf::from("/run/slopbox/github")
         };
         environment.push(("SLOPBOX_GITHUB_CONFIG".into(), directory.into_os_string()));
+    }
+    if !config.environment.is_empty() {
+        let mut context: BTreeMap<String, String> = environment
+            .iter()
+            .map(|(name, value)| {
+                Ok((
+                    name.to_str()
+                        .context("guest environment name is not UTF-8")?
+                        .to_owned(),
+                    value
+                        .to_str()
+                        .context("guest environment value is not UTF-8")?
+                        .to_owned(),
+                ))
+            })
+            .collect::<Result<_>>()?;
+        #[cfg(target_os = "macos")]
+        {
+            context.insert(
+                "HOME".into(),
+                private_home
+                    .to_str()
+                    .context("private home is not UTF-8")?
+                    .to_owned(),
+            );
+            context.insert(
+                "TMPDIR".into(),
+                session_dir
+                    .path()
+                    .join("tmp")
+                    .to_str()
+                    .context("temporary path is not UTF-8")?
+                    .to_owned(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            context.insert("HOME".into(), "/home/slopbox".into());
+            context.insert("TMPDIR".into(), "/tmp".into());
+        }
+        environment.extend(crate::guest_environment::resolve(
+            &config.environment,
+            &context,
+        )?);
     }
     let plan = ExecutionPlan {
         session_dir: session_dir.path(),
@@ -623,7 +678,8 @@ pub fn doctor(
             paths.config_root.join("config.toml").display()
         ),
         if config.runtime.is_some() {
-            "Setup: not needed for explicit run commands; Pi default launch is unavailable".into()
+            "Setup: not needed for run/default_command; existing saved policy ceilings still apply"
+                .into()
         } else if launch.is_some() {
             "Setup: saved host-side policy applies".into()
         } else {
@@ -774,7 +830,11 @@ fn describe_status(
         },
         format!(
             "Default env   {}",
-            native::diagnostics::environment_description(&paths.workspace)
+            if config.runtime.is_some() {
+                "Selected host runtime; no automatic project activation"
+            } else {
+                native::diagnostics::environment_description(&paths.workspace)
+            }
         ),
         format!(
             "Changes       {}",
@@ -814,6 +874,27 @@ fn describe_status(
             }
         ),
     ];
+    if let Some(command) = &config.default_command {
+        lines.push(format!(
+            "Default       {} ({} additional arguments)",
+            crate::launch::terminal_text(
+                command.first().map(String::as_str).unwrap_or("[invalid]")
+            ),
+            command.len().saturating_sub(1)
+        ));
+    }
+    crate::guest_environment::validate(&config.environment)?;
+    if !config.environment.is_empty() {
+        lines.push(format!(
+            "Environment   {} (host configuration; values not displayed)",
+            config
+                .environment
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     if policy.credentials == crate::policy::CredentialMode::Brokered {
         let providers = crate::provider::configured_names(&paths.state_root);
         lines.push(format!(
@@ -1119,9 +1200,33 @@ pub fn launch(agent_arguments: Vec<OsString>, approval_view: bool) -> Result<Exi
     backend::ensure_supported()?;
     let paths = prepare_paths(None)?;
     validate_workspace(&paths)?;
+    let config = load_config(&paths.config_root)?;
+    if let Some(command) = config.default_command {
+        ensure!(
+            !command.is_empty()
+                && !command[0].is_empty()
+                && command.iter().all(|argument| !argument.contains('\0')),
+            "default_command must contain a command and valid literal arguments"
+        );
+        return run(RunOptions {
+            workspace: Some(paths.workspace),
+            profile: None,
+            dev_env: DevEnvironment::Auto,
+            tool_network: ToolNetwork::General,
+            no_host_pi_resources: false,
+            command: command
+                .into_iter()
+                .map(OsString::from)
+                .chain(agent_arguments)
+                .collect(),
+            dry_run: false,
+            approval_view,
+            launch_config: None,
+        });
+    }
     ensure!(
-        load_config(&paths.config_root)?.runtime.is_none(),
-        "selected executable runtimes do not provide integrated Pi launch; use slopbox run -- COMMAND"
+        config.runtime.is_none(),
+        "no default_command configured; use slopbox run -- COMMAND or set a host default_command"
     );
     let (launch, initialized) = match crate::launch::load(&paths.config_root, &paths.workspace)? {
         Some(config) => (config, false),
@@ -2113,6 +2218,9 @@ fn configured_http_routes(
                 }
                 SecretConfig::Environment { variable } => {
                     crate::secret::from_environment(variable)?
+                }
+                SecretConfig::Keychain { service, account } => {
+                    crate::secret::from_keychain(service, account)?
                 }
                 SecretConfig::Command { argv } => crate::secret::from_command(
                     argv,

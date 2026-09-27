@@ -22,7 +22,24 @@ A Slopbox session can provide:
 
 The Linux backend uses bubblewrap and shares the host kernel. It is intended for mistakes, prompt injection, and ordinary malicious userspace—not kernel exploits. See [SECURITY-MODEL.md](SECURITY-MODEL.md) for precise guarantees and limitations.
 
-## Try it
+## Generic commands
+
+Configure selected tools in the host's `~/.config/slopbox/config.toml`:
+
+```toml
+default_command = ["bash"]
+
+[policy]
+harness = "none"
+credentials = "none"
+
+[runtime]
+executables = ["bash", "cat", "ls"]
+```
+
+Then use `slopbox` for the configured command or `slopbox run -- COMMAND` for another selected tool. No Pi setup is required, and selected runtimes do not implicitly activate project flakes. Host-configured guest environment values can refer to public broker endpoints and private session paths. macOS account secrets can come directly from Keychain; they remain host-side. See [configuration](docs/configuration.md#command-launch) and [native runtime limits](docs/poc-native-runtime.md).
+
+## Legacy Pi development setup
 
 ```bash
 nix develop
@@ -30,7 +47,7 @@ cargo test
 nix develop -c cargo run
 ```
 
-The default command starts Pi in the current project. First run asks how changes should work and confirms access. Use `slopbox init` to reconfigure, or `slopbox -- --continue` to resume Pi.
+Without a configured default command or selected runtime, the legacy launch starts Pi in the current project. First run asks how changes should work and confirms access. Use `slopbox init` to reconfigure, or `slopbox -- --continue` to resume Pi.
 
 Inspect the effective policy without starting an agent:
 

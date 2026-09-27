@@ -49,6 +49,31 @@ pub(super) fn render(
     .to_owned();
     let config = plan.runtime.native.config.as_ref();
     let generic = config.is_none();
+    if generic && !tool && !plan.private_terminal {
+        // Redirected standard files are explicit descriptor grants, not path read/write grants.
+        for descriptor in [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+            let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if unsafe { libc::fstat(descriptor, metadata.as_mut_ptr()) } != 0 {
+                continue;
+            }
+            if unsafe { metadata.assume_init() }.st_mode & libc::S_IFMT != libc::S_IFREG {
+                continue;
+            }
+            let mut path = [0u8; libc::PATH_MAX as usize];
+            if unsafe { libc::fcntl(descriptor, libc::F_GETPATH, path.as_mut_ptr()) } == 0 {
+                use std::os::unix::ffi::OsStrExt;
+                let length = path
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .unwrap_or(path.len());
+                let path = Path::new(std::ffi::OsStr::from_bytes(&path[..length]));
+                profile.push_str(&format!(
+                    "(allow file-read-metadata (literal {}))\n",
+                    quoted(path)?
+                ));
+            }
+        }
+    }
     let home = if tool {
         plan.tool_home
     } else {
