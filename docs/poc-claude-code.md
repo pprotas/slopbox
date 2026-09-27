@@ -10,7 +10,7 @@ Unmodified native **Claude Code 2.1.283** passes a headless fixture on aarch64 U
 - Host-injected bearer authentication, denied host credential/configuration reads, an immutable executable and direct-network denial.
 - Account-scoped inference and the fixed-model canary are reachable from Claude's Bash subprocess. On Linux, an explicit `tool-run` denies the fixed-model broker but retains the account route. Native generic mode has no separate tool role.
 
-The upstream is a deterministic fixture, not Anthropic. No real account, subscription, model usage or host trust changes are involved. Reported token costs come from fabricated usage fields, not actual charges.
+The deterministic fixture's upstream is not Anthropic. That fixture uses no real account, subscription or model usage; its reported costs come from fabricated usage fields. The separate opt-in live test below uses paid OpenRouter inference. Neither changes host trust.
 
 ## Configuration shape
 
@@ -63,9 +63,25 @@ Bun's `Intl.Collator` initialization hit an assertion loop when system ICU data 
 
 Seatbelt also permits execution independently of ordinary file reads. Generic profiles therefore restrict execution paths explicitly; a regression checks that an unselected system binary cannot execute. Native file tests check denied reads, not Linux-style disappearance: file existence can remain observable on macOS. A home-scoped Unix-socket grant was removed after a socket-rename bypass was reproduced; Claude's headless fixture still passes without named application IPC.
 
+## Live OpenRouter acceptance
+
+The native production package also passed `tests/native/claude-live.py` against OpenRouter using `anthropic/claude-haiku-4.5`. Both unrelated, generated workspaces completed Read/Edit/Bash in four turns, with partial streaming events, verified edits and unchanged isolation probes. No application or Slopbox core changes were needed.
+
+A dedicated key with a provider-side $1 credit limit was retrieved from its explicitly approved Keychain item into the host runner, then passed to Slopbox as an environment-backed account secret. Neither configuration files nor guest environments contained the key. General networking and the separate fixed-model broker were disabled. Only synthetic workspace data was sent; existing Claude logins and host trust stores were untouched.
+
+This is an opt-in paid test, not CI. It checks the key's credit limit before inference, pins the selected model and Haiku/Sonnet/Opus aliases to Haiku, limits each run to six turns and 1,024 output tokens per request, and sets Claude's client-side budget to $0.20. The provider-side key limit is the spending boundary; Claude's cost estimate differs from OpenRouter's accounting. A follow-up key-status query reported $0.0371187 used for the two runs; the immediate post-run snapshot was lower because accounting updates lag. The account route does not enforce a model allowlist, and Bash still inherits its account authority.
+
+```sh
+# Supply SLOPBOX_LIVE_OPENROUTER_KEY through an approved host-side secret source.
+python3 tests/native/claude-live.py /absolute/slopbox /absolute/fixture/claude \
+  /absolute/reviewed/node --live
+```
+
+The script verifies the original darwin-arm64 artifact checksum and deletes its disposable workspace/configuration state on exit. It does not read Keychain itself, change the caller's configuration, or install software.
+
 ## Limits and reproduction
 
-This validates the **headless bearer-gateway path**, not direct Anthropic `x-api-key` authentication, subscription login/refresh, interactive UI, MCP, plugins, remote control or every Claude feature. Account authentication injects `Authorization`, not arbitrary secret-bearing headers. There is no new fixed Anthropic broker or automatic harness/tool separation. A root-prefix POST route grants the corresponding upstream account authority, not inference-only authority.
+These checks validate the **headless bearer-gateway path**, including live OpenRouter authentication on native macOS, not direct Anthropic `x-api-key` authentication, subscription login/refresh, interactive UI, MCP, plugins, remote control or every Claude feature. Account authentication injects `Authorization`, not arbitrary secret-bearing headers. There is no new fixed Anthropic broker or automatic harness/tool separation. A root-prefix POST route grants the corresponding upstream account authority, not inference-only authority.
 
 Install the pinned release in a disposable directory and verify its SHA-256 before execution. The Linux CI workflow pins the x86_64 artifact; remote CI has not run. Local artifacts from `https://downloads.claude.ai/claude-code-releases/2.1.283/`:
 

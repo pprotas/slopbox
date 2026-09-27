@@ -39,7 +39,7 @@ Generic commands and their subprocesses share the outer role's authority. They c
 
 On Apple silicon/macOS 27, the production launcher passes `tests/native/generic.py`: selected Node execution, read-only installation and workspace enforcement, blocked credential/configuration reads, unselected execution, host-socket denial after symlinks/hard links/renames, direct-network denial, within-role child termination, denied host signalling and exit-status propagation.
 
-The shared [Claude Code fixture](poc-claude-code.md) also passes with the unmodified native release: streaming, Read/Edit/Bash and broker/isolation probes in two unrelated workspaces. It uses disposable credentials, not a live account or subscription.
+The shared [Claude Code fixture](poc-claude-code.md) also passes with the unmodified native release: streaming, Read/Edit/Bash and broker/isolation probes in two unrelated workspaces. The deterministic fixture uses disposable credentials. A separate opt-in [live OpenRouter/Haiku test](poc-claude-code.md#live-openrouter-acceptance) also passes with the production package; it does not validate subscription authentication or interactive use.
 
 ```sh
 cargo build --locked
