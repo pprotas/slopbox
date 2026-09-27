@@ -179,6 +179,23 @@ pub(super) fn render(
             ));
         }
     }
+    let account_ca = plan.session_dir.join("account-ca.pem");
+    if tool && account_ca.is_file() {
+        ensure!(
+            plan.brokers.authenticated_http.is_some(),
+            "account TLS broker is unavailable"
+        );
+        profile.push_str(&format!(
+            "(allow file-read* (literal {}))\n",
+            quoted(&account_ca)?
+        ));
+        for parent in account_ca.ancestors().skip(1) {
+            profile.push_str(&format!(
+                "(allow file-read-metadata (literal {}))\n",
+                quoted(parent)?
+            ));
+        }
+    }
     let github = plan.session_dir.join("github");
     if tool && github.is_dir() {
         let endpoint = plan
@@ -335,6 +352,8 @@ mod tests {
         std::fs::create_dir(&session).unwrap();
         let gitconfig = session.join("gitconfig");
         std::fs::write(&gitconfig, "generated").unwrap();
+        let ca = session.join("account-ca.pem");
+        std::fs::write(&ca, "public trust").unwrap();
         let executable = root.path().join("control/worker");
         let helper = executable.with_file_name("git-sign");
         let signing = root.path().join("signing");
@@ -393,6 +412,13 @@ mod tests {
                 )));
                 assert_eq!(
                     profile.contains(&format!("(subpath {})", quoted(&github).unwrap())),
+                    tool
+                );
+                assert_eq!(
+                    profile.contains(&format!(
+                        "(allow file-read* (literal {}))",
+                        quoted(&ca).unwrap()
+                    )),
                     tool
                 );
                 assert_eq!(

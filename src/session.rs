@@ -31,6 +31,8 @@ use crate::policy::{
 };
 use crate::{DevEnvironment, ToolNetwork};
 
+mod access;
+
 static APPLY_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct RunOptions {
@@ -62,6 +64,10 @@ struct SlopboxConfig {
     http_routes: Vec<HttpRouteConfig>,
     #[serde(default)]
     git: GitConfig,
+    #[serde(default)]
+    defaults: access::Selection,
+    #[serde(default)]
+    workspaces: Vec<access::Rule>,
 }
 
 #[derive(Default, Deserialize)]
@@ -74,7 +80,8 @@ struct GitConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GitIdentityConfig {
-    workspace: PathBuf,
+    id: Option<String>,
+    workspace: Option<PathBuf>,
     name: String,
     email: String,
     signing_key_fingerprint: String,
@@ -92,13 +99,15 @@ enum SecretConfig {
 #[serde(deny_unknown_fields)]
 struct HttpRouteConfig {
     name: String,
-    workspace: PathBuf,
+    workspace: Option<PathBuf>,
     upstream: String,
     methods: Vec<String>,
     #[serde(default)]
     allow_private_addresses: bool,
     #[serde(default)]
     direct: bool,
+    #[serde(default)]
+    proxy: bool,
     authentication: HttpAuthenticationConfig,
     #[serde(default)]
     git_urls: Vec<String>,
@@ -372,6 +381,13 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         None
     };
     let mut environment = broker_environment(&brokers);
+    if let Some(ca) = gateway.as_ref().and_then(GatewaySession::account_ca) {
+        let path = session_dir.path().join("account-ca.pem");
+        write_private(&path, ca)?;
+        #[cfg(target_os = "linux")]
+        let path = PathBuf::from("/run/slopbox/account-ca.pem");
+        environment.push(("SLOPBOX_ACCOUNT_CA".into(), path.into_os_string()));
+    }
     if direct_accounts {
         let endpoint = brokers
             .authenticated_http
@@ -726,6 +742,12 @@ fn describe_status(
         lines.push("Accounts      No authenticated routes".into());
     } else {
         for route in routes {
+            if route.proxy {
+                lines.push(format!(
+                    "Account TLS   {}: opt-in mediation; explicit proxy and session trust required",
+                    route.name
+                ));
+            }
             lines.push(format!(
                 "Account route {}: {} {}{}; available to agent and commands",
                 route.name,
@@ -828,6 +850,15 @@ fn describe_status(
             .into(),
     );
     if verbose {
+        let (_, rules) = access::select(
+            &config.defaults,
+            &config.workspaces,
+            &home,
+            &paths.workspace,
+        )?;
+        lines.push(format!(
+            "access-selection: host defaults; workspace rules {rules:?} (broadest first)"
+        ));
         lines.push(String::new());
         lines.extend([
             format!("profile: {profile}"),
@@ -1028,23 +1059,33 @@ fn configured_git_identity(
     workspace: &Path,
 ) -> Result<Option<GitSigningIdentity>> {
     let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
+    let (selection, _) = access::select(&config.defaults, &config.workspaces, &home, workspace)?;
+    if matches!(
+        selection.git_identity,
+        Some(access::Identity::Disabled(false))
+    ) {
+        return Ok(None);
+    }
     let mut matching = Vec::new();
     for identity in &config.git.identities {
-        let configured_workspace = expand_host_home(&identity.workspace, &home)?;
-        let configured_workspace = fs::canonicalize(&configured_workspace).with_context(|| {
-            format!(
-                "failed to resolve Git identity workspace {}",
-                configured_workspace.display()
-            )
-        })?;
-        if configured_workspace == workspace {
-            matching.push(GitSigningIdentity {
-                name: identity.name.clone(),
-                email: identity.email.clone(),
-                fingerprint: identity.signing_key_fingerprint.clone(),
-            });
+        let selected = match &selection.git_identity {
+            Some(access::Identity::Named(id)) => identity.id.as_ref() == Some(id),
+            None => identity.workspace.is_some(),
+            Some(access::Identity::Disabled(_)) => unreachable!(),
+        };
+        if !selected || !matches_workspace(identity.workspace.as_deref(), &home, workspace)? {
+            continue;
         }
+        matching.push(GitSigningIdentity {
+            name: identity.name.clone(),
+            email: identity.email.clone(),
+            fingerprint: identity.signing_key_fingerprint.clone(),
+        });
     }
+    ensure!(
+        selection.git_identity.is_none() || !matching.is_empty(),
+        "selected Git identity is unknown or outside its workspace binding"
+    );
     ensure!(
         matching.len() <= 1,
         "multiple Git identities are configured for {}",
@@ -1829,23 +1870,28 @@ fn load_config(config_root: &Path) -> Result<SlopboxConfig> {
         .with_context(|| format!("invalid Slopbox configuration {}", path.display()))
 }
 
+fn matches_workspace(binding: Option<&Path>, home: &Path, workspace: &Path) -> Result<bool> {
+    match binding {
+        Some(path) => Ok(canonicalize_allow_missing(&expand_host_home(path, home)?)? == workspace),
+        None => Ok(true),
+    }
+}
+
 fn workspace_http_routes<'a>(
     config: &'a SlopboxConfig,
     workspace: &Path,
 ) -> Result<Vec<&'a HttpRouteConfig>> {
     let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
+    let (selection, _) = access::select(&config.defaults, &config.workspaces, &home, workspace)?;
     let mut routes = Vec::new();
     let mut names = HashSet::new();
     let mut direct: Vec<url::Url> = Vec::new();
     for route in &config.http_routes {
-        let configured_workspace = expand_host_home(&route.workspace, &home)?;
-        let configured_workspace = fs::canonicalize(&configured_workspace).with_context(|| {
-            format!(
-                "failed to resolve authenticated HTTP workspace {}",
-                configured_workspace.display()
-            )
-        })?;
-        if configured_workspace != workspace {
+        let selected = match &selection.accounts {
+            Some(accounts) => accounts.contains(&route.name),
+            None => route.workspace.is_some(),
+        };
+        if !selected || !matches_workspace(route.workspace.as_deref(), &home, workspace)? {
             continue;
         }
         ensure!(
@@ -1855,7 +1901,7 @@ fn workspace_http_routes<'a>(
         );
         let upstream =
             crate::gateway::validate_http_route(&route.name, &route.upstream, &route.methods)?;
-        if route.direct {
+        if route.direct || route.proxy {
             for other in &direct {
                 let left = upstream.path().trim_end_matches('/');
                 let right = other.path().trim_end_matches('/');
@@ -1875,6 +1921,12 @@ fn workspace_http_routes<'a>(
             direct.push(upstream);
         }
         routes.push(route);
+    }
+    if let Some(accounts) = &selection.accounts {
+        ensure!(
+            accounts.iter().all(|name| names.contains(name)),
+            "selected account is unknown or outside its workspace binding"
+        );
     }
     Ok(routes)
 }
@@ -1939,14 +1991,17 @@ fn configured_http_routes(
             ("token", None) => HttpAuthentication::Token { secret },
             _ => unreachable!(),
         };
-        routes.push(AuthenticatedHttpRoute::new(
-            route.name.clone(),
-            route.upstream.clone(),
-            route.methods.clone(),
-            authentication,
-            route.allow_private_addresses,
-            route.direct,
-        )?);
+        routes.push(
+            AuthenticatedHttpRoute::new(
+                route.name.clone(),
+                route.upstream.clone(),
+                route.methods.clone(),
+                authentication,
+                route.allow_private_addresses,
+                route.direct,
+            )?
+            .with_proxy(route.proxy),
+        );
     }
     Ok(routes)
 }
@@ -2052,6 +2107,113 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_access_defaults_apply_to_new_workspaces_without_resolving_secrets() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let config: SlopboxConfig = toml::from_str(
+            r#"
+[defaults]
+git_identity = "agent"
+accounts = ["forge"]
+[[git.identities]]
+id = "agent"
+name = "Agent"
+email = "agent@example.test"
+signing_key_fingerprint = "SHA256:fixture"
+[[http_routes]]
+name = "forge"
+upstream = "https://forge.example.test/api"
+methods = ["GET", "POST"]
+authentication = { type = "bearer", secret = "unavailable" }
+[secrets.unavailable]
+source = "command"
+argv = ["must-not-execute"]
+"#,
+        )
+        .unwrap();
+        for workspace in [&first, &second] {
+            let workspace = workspace.canonicalize().unwrap();
+            assert_eq!(
+                configured_git_identity(&config, &workspace)
+                    .unwrap()
+                    .unwrap()
+                    .email,
+                "agent@example.test"
+            );
+            let routes = workspace_http_routes(&config, &workspace).unwrap();
+            assert_eq!(routes.len(), 1);
+            assert_eq!(routes[0].name, "forge");
+            assert!(!workspace.join(".slopbox.toml").exists());
+        }
+        let mut dormant = config;
+        dormant.defaults = access::Selection::default();
+        assert!(configured_git_identity(&dormant, &first).unwrap().is_none());
+        assert!(workspace_http_routes(&dormant, &first).unwrap().is_empty());
+    }
+
+    #[test]
+    fn workspace_rules_can_remove_default_identity_and_account_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let config: SlopboxConfig = toml::from_str(&format!(
+            r#"
+[defaults]
+git_identity = "unavailable"
+accounts = ["unavailable"]
+[[workspaces]]
+paths = ["{}"]
+git_identity = false
+accounts = []
+"#,
+            workspace.display()
+        ))
+        .unwrap();
+        assert!(
+            configured_git_identity(&config, &workspace)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            workspace_http_routes(&config, &workspace)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(configured_git_identity(&config, workspace.parent().unwrap()).is_err());
+        assert!(workspace_http_routes(&config, workspace.parent().unwrap()).is_err());
+        for text in [
+            "[defaults]\naccounts = ['forge']",
+            "[[workspaces]]\npaths = ['/']\naccounts = ['forge']",
+        ] {
+            assert!(toml::from_str::<ProjectConfig>(text).is_err());
+        }
+    }
+
+    #[test]
+    fn global_selection_cannot_expand_an_existing_workspace_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let config: SlopboxConfig = toml::from_str(&format!(
+            r#"
+[defaults]
+accounts = ["scoped"]
+[[http_routes]]
+name = "scoped"
+workspace = "{}"
+upstream = "https://forge.example.test/repo"
+methods = ["GET"]
+authentication = {{ type = "bearer", secret = "missing" }}
+"#,
+            workspace.display()
+        ))
+        .unwrap();
+        assert_eq!(workspace_http_routes(&config, &workspace).unwrap().len(), 1);
+        assert!(workspace_http_routes(&config, workspace.parent().unwrap()).is_err());
+    }
+
+    #[test]
     fn overlapping_direct_accounts_fail_before_secret_resolution() {
         let workspace = tempfile::tempdir().unwrap();
         let workspace = workspace.path().canonicalize().unwrap();
@@ -2093,7 +2255,10 @@ authentication = {{ type = "bearer", secret = "github" }}
         let identity = &config.git.identities[0];
         assert_eq!(identity.name, "agent");
         assert_eq!(identity.email, "agent@example.com");
-        assert_eq!(identity.workspace, Path::new("~/Projects/example"));
+        assert_eq!(
+            identity.workspace.as_deref(),
+            Some(Path::new("~/Projects/example"))
+        );
         assert_eq!(config.http_routes.len(), 2);
         assert!(!config.http_routes[0].direct);
         assert!(config.http_routes[1].direct);

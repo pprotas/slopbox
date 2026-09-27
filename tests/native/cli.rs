@@ -155,6 +155,34 @@ fn native_cli_git_signing_and_routes() {
 }
 
 #[test]
+#[ignore = "host integration: account TLS; set SLOPBOX_TEST_NODE and SLOPBOX_TEST_SLOPBOX"]
+fn native_cli_shared_accounts() {
+    let output = std::process::Command::new(
+        std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"),
+    )
+    .arg(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/native/accounts.mjs"
+    ))
+    .arg(std::env::current_exe().unwrap())
+    .arg(std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required"))
+    .env_clear()
+    .current_dir("/")
+    .output()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("native shared accounts, curl/Node TLS mediation and enforcement passed")
+    );
+}
+
+#[test]
 #[ignore = "host integration: native gh broker; set SLOPBOX_TEST_NODE, SLOPBOX_TEST_GH and SLOPBOX_TEST_SLOPBOX"]
 fn native_cli_github_account() {
     let output = std::process::Command::new(

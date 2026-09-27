@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
-use std::os::unix::net::UnixStream;
 
 use anyhow::{Context, Result, ensure};
 
@@ -126,7 +125,7 @@ pub(crate) fn resolve_public(host: &str, port: u16) -> Result<SocketAddr> {
 }
 
 pub(crate) fn send_simple_response(
-    client: &mut UnixStream,
+    client: &mut impl Write,
     status: u16,
     reason: &str,
     body: &str,
@@ -314,6 +313,7 @@ mod tests {
 pub(crate) mod testing {
     use super::*;
     use std::net::TcpStream;
+    use std::os::unix::net::UnixStream;
     use std::time::Duration;
     pub(crate) fn exchange(
         request: &[u8],

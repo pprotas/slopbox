@@ -148,9 +148,58 @@ Private, loopback, and link-local destinations are rejected by default. A host-c
 allow_private_addresses = true
 ```
 
-A route activates only when its canonical configured workspace matches the current project. The guest receives a local base URL and route name. It never receives the real secret.
+A route with `workspace` activates only for that canonical workspace, unless an explicit host account selection excludes it. Routes without `workspace` are dormant until selected through host defaults or directory rules. The guest receives a local base URL and route name, never the real secret.
 
-Routes fix the upstream origin, base path, methods, and authentication scheme. Slopbox strips guest authentication, rejects redirects and unsafe traversal, pins DNS resolution, requests identity encoding, and redacts exact reflected secret bytes. Transformed secret reflection remains outside the guarantee.
+Routes fix the upstream origin, base path, methods, and authentication scheme. Slopbox strips guest authentication, does not follow redirects, rejects unsafe traversal, pins DNS resolution, requests identity encoding, and redacts exact reflected secret bytes. Transformed secret reflection remains outside the guarantee.
+
+### Shared host defaults and directory rules
+
+Define reusable identities and accounts once in host-owned `config.toml`:
+
+```toml
+[defaults]
+git_identity = "agent"
+accounts = ["forge"]
+
+[[git.identities]]
+id = "agent"
+name = "Agent"
+email = "agent@example.com"
+signing_key_fingerprint = "SHA256:REPLACE_WITH_APPROVED_FINGERPRINT"
+
+[secrets.forge]
+source = "environment"
+variable = "FORGE_TOKEN"
+
+[[http_routes]]
+name = "forge"
+upstream = "https://forge.example.com/api"
+methods = ["GET", "POST"]
+proxy = true
+authentication = { type = "bearer", secret = "forge" }
+
+[[workspaces]]
+paths = ["~/Projects/untrusted", "~/Downloads"]
+git_identity = false
+accounts = []
+```
+
+Both `~/Projects/first` and `~/Work/second` select the same definitions without repository configuration. Directory rules match canonical directory trees and apply broadest first, regardless of declaration order. An omitted setting inherits; `git_identity = false` disables signing and `accounts = []` disables accounts. Account lists replace rather than append. Equally specific overlapping rules fail closed.
+
+Existing `workspace` bindings remain exact-workspace ceilings even when selected by name. Without an explicit selection, legacy workspace-bound entries still activate; unbound entries do not. Unknown selections fail before resolving secrets. Repository `.slopbox.toml` cannot define these grants. `slopbox status --verbose` shows selected access and matching host rule indexes without resolving secrets. Bare launch still requires per-project initialization.
+
+### Experimental shared HTTPS transport
+
+`proxy = true` opts a route into TLS mediation; existing routes remain unchanged. Tools receive `SLOPBOX_ACCOUNT_PROXY` and a read-only public `SLOPBOX_ACCOUNT_CA`. Neither the host trust store nor the client's normal proxy/trust environment is changed. For example:
+
+```bash
+curl --proxy "$SLOPBOX_ACCOUNT_PROXY" --noproxy '' \
+  --cacert "$SLOPBOX_ACCOUNT_CA" https://forge.example.com/api/user
+```
+
+This explicit account proxy accepts only configured mediated origins; it does not provide general egress. CONNECT authority, TLS server name, and HTTP Host must agree. The existing route checks still enforce paths, methods, DNS/address restrictions, upstream TLS verification, authentication replacement and exact-byte redaction. Redirects are returned but never followed by the broker; a client's next request needs its own approved route. Only HTTP/1.1 requests with bounded Content-Length bodies are supported, not chunked uploads. Client certificate pinning and clients that ignore proxy/trust settings are outside this experiment.
+
+The public CA expires after one day and is unique to a session. Private certificate keys remain host-side; no reusable CA signing service survives setup. See [POC scope and validation](poc-generic-capabilities.md).
 
 ### Git smart HTTP
 

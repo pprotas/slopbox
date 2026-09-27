@@ -357,6 +357,23 @@ impl Session {
                 &plan.harness.environment
             }) {
                 let name = name.to_str().context("invalid environment name")?;
+                if name == "SLOPBOX_ACCOUNT_CA" {
+                    if tool {
+                        let endpoint = plan
+                            .brokers
+                            .authenticated_http
+                            .as_ref()
+                            .context("account TLS broker is unavailable")?;
+                        values.extend([
+                            format!(
+                                "SLOPBOX_ACCOUNT_CA={}",
+                                value.to_str().context("invalid account trust path")?
+                            ),
+                            format!("SLOPBOX_ACCOUNT_PROXY=http://127.0.0.1:{}", endpoint.port),
+                        ]);
+                    }
+                    continue;
+                }
                 if name == "SLOPBOX_GITHUB_CONFIG" {
                     if tool {
                         for (name, value) in crate::github::environment(Path::new(value)) {

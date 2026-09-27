@@ -189,6 +189,18 @@ fn tool_environment(
         ));
     }
 
+    if env::var_os("SLOPBOX_ACCOUNT_CA").is_some() {
+        let ca = Path::new("/run/slopbox/account-ca.pem");
+        let port = authenticated_http_port.context("account TLS broker is unavailable")?;
+        ensure!(ca.is_file(), "account TLS trust is unavailable");
+        values.extend([
+            ("SLOPBOX_ACCOUNT_CA".into(), ca.as_os_str().to_owned()),
+            (
+                "SLOPBOX_ACCOUNT_PROXY".into(),
+                format!("http://127.0.0.1:{port}").into(),
+            ),
+        ]);
+    }
     if env::var_os("SLOPBOX_GITHUB_CONFIG").is_some() {
         let directory = Path::new("/run/slopbox/github");
         ensure!(

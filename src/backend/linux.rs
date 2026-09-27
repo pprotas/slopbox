@@ -206,6 +206,17 @@ fn command_with_system_links(
             .arg(gitconfig)
             .arg("/run/slopbox/gitconfig");
     }
+    let account_ca = plan.session_dir.join("account-ca.pem");
+    if account_ca.is_file() {
+        ensure!(
+            plan.brokers.authenticated_http.is_some(),
+            "account TLS broker is unavailable"
+        );
+        command
+            .arg("--ro-bind")
+            .arg(account_ca)
+            .arg("/run/slopbox/account-ca.pem");
+    }
     let github = plan.session_dir.join("github");
     if github.is_dir() {
         command
@@ -619,6 +630,12 @@ mod tests {
             ),
         ];
         for (brokers, selected) in cases {
+            let ca = session.path().join("account-ca.pem");
+            if brokers.authenticated_http.is_some() {
+                fs::write(&ca, "public trust").unwrap();
+            } else if ca.exists() {
+                fs::remove_file(&ca).unwrap();
+            }
             let plan = ExecutionPlan {
                 workspace: Workspace {
                     source: Path::new("/host/workspace"),
@@ -681,6 +698,15 @@ mod tests {
                     .any(|args| args == ["--ro-bind", "/nix/store", "/nix/store"])
             );
             assert_eq!(arguments.contains(&"__sandbox-init"), !selected.is_empty());
+            assert_eq!(
+                arguments.windows(3).any(|args| args
+                    == [
+                        "--ro-bind",
+                        ca.to_str().unwrap(),
+                        "/run/slopbox/account-ca.pem"
+                    ]),
+                brokers.authenticated_http.is_some()
+            );
             for (name, port) in [
                 ("general", "10001"),
                 ("model", "10002"),
