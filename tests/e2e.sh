@@ -10,7 +10,7 @@ SLOPBOX=$(realpath "$SLOPBOX")
 SOURCE_ROOT=${2:-}
 TERMINAL_TESTS_DIR=${3:-"$(dirname "$(realpath "${BASH_SOURCE[0]}")")"}
 
-for command in awk bash bwrap cmp curl diff find git node pi rg script sed stty timeout; do
+for command in awk bash bwrap cmp curl diff find git node openssl pi rg script sed ssh-add ssh-agent ssh-keygen stty timeout; do
   if ! command -v "$command" >/dev/null; then
     echo "missing test dependency: $command" >&2
     exit 2
@@ -1101,4 +1101,6 @@ fi
 
 assert_not_contains "$canary" "$workspace" "$host_home/data/slopbox"
 assert_not_contains "$codex_canary" "$workspace" "$host_home/data/slopbox/boxes"
+echo "e2e: shared identity/accounts and mediated HTTPS clients"
+SHELL=$(type -P bash) node "$TERMINAL_TESTS_DIR/linux-accounts.mjs" "$SLOPBOX"
 echo "e2e: all checks passed"

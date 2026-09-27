@@ -117,6 +117,53 @@ authentication = {{ type = "bearer", secret = "synthetic" }}
 }
 
 #[test]
+fn verbose_status_identifies_each_host_selection_source_without_secrets() {
+    let fixture = Fixture::new();
+    let path = fixture.root.path().join("config/slopbox/config.toml");
+    let mut config = fs::read_to_string(&path).unwrap();
+    for (extra, source) in [
+        (String::new(), "legacy exact-workspace bindings"),
+        (
+            "\n[defaults]\naccounts = ['synthetic']\n".into(),
+            "host defaults",
+        ),
+        (
+            format!(
+                "\n[[workspaces]]\npaths = [{:?}]\naccounts = []\ngit_identity = false\n",
+                fixture.workspace
+            ),
+            "host workspaces[0]",
+        ),
+    ] {
+        config.push_str(&extra);
+        fs::write(&path, &config).unwrap();
+        let output = fixture
+            .command()
+            .args(["status", "--verbose"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            report.contains(&format!("accounts-source: {source}")),
+            "{report}"
+        );
+        if source == "host workspaces[0]" {
+            assert!(report.contains("git_identity-source: host workspaces[0]"));
+            assert!(report.contains("Accounts      No authenticated routes"));
+        } else {
+            assert!(report.contains("git_identity-source: legacy exact-workspace bindings"));
+            assert!(report.contains("Account route synthetic:"));
+        }
+        fixture.assert_untouched();
+    }
+}
+
+#[test]
 fn inspection_does_not_execute_credential_commands() {
     let fixture = Fixture::new();
     let path = fixture.root.path().join("config/slopbox/config.toml");

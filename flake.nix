@@ -109,6 +109,8 @@
               git
               gnused
               nodejs
+              openssh
+              openssl
               pi-coding-agent
               ripgrep
               util-linux

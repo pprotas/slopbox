@@ -1,19 +1,19 @@
 # POC handover
 
-Read [direction.md](direction.md) and [poc-generic-capabilities.md](poc-generic-capabilities.md). Work remains uncommitted on `poc/generic-capabilities`; preserve the working tree.
+The [generic capabilities POC](poc-generic-capabilities.md) meets its bounded acceptance criteria. [direction.md](direction.md) remains authoritative; this is not production TLS rollout or universal runtime/harness support.
 
-## Implemented
+## Implementation
 
-- `src/session/access.rs`: reusable identity/account selections through host defaults and canonical directory rules, explicit disabling, legacy exact-workspace ceilings and secret-free inspection.
-- `src/gateway/tls.rs`: opt-in account CONNECT mediation with session-local trust, CONNECT/SNI/Host binding and existing account routing/authentication/redaction checks. CA and leaf subjects are distinct for Node/OpenSSL compatibility.
-- Account parsing rejects all Transfer-Encoding, duplicate Content-Length, userinfo and encoded/malformed authorities.
-- Linux/native wiring exposes public trust and explicit account proxy settings without replacing normal proxy/trust settings.
-- `src/gateway/tls/tests.rs`: registered and passing, including verified local HTTPS upstreams, curl/Node, trust/substitution/framing denials, authentication replacement and redaction.
-- `tests/native/accounts*.mjs`: passing native macOS fixture across two unrelated workspaces; production workers enforce read-only trust, host-config/direct-network denial and role environment separation.
-- Configuration and security docs describe the experiment, precedence and limitations. No live host configuration or trust stores were changed.
+- `src/session/access.rs`: shared identity/account defaults, canonical directory overrides, explicit disabling and legacy workspace ceilings. Verbose status identifies each setting's host source without resolving secrets.
+- `src/gateway/tls.rs`: opt-in CONNECT mediation, ephemeral session trust and CONNECT/SNI/Host binding, reusing account authentication, path/method checks and redaction. Request framing and malformed authorities fail closed.
+- Native/Linux tools receive explicit account proxy settings and read-only public trust. Normal proxy/trust settings and the host trust store are unchanged.
+- `tests/account-client.mjs` uses Node 24.5+'s built-in HTTPS proxy support; curl exercises the same transport.
+- `tests/native/accounts*.mjs` validates native macOS enforcement. `tests/linux-accounts.mjs` and `tests/linux-account-probe.mjs`, included in `nix run .#e2e`, validate Linux enforcement, verified HTTPS upstreams and shared signing across workspaces.
 
-## Validation and remaining work
+## Evidence
 
-The macOS unit/CLI suite, explicit TLS integration tests, native shared-account fixture, Pi RPC tests, formatting and strict Clippy pass. Commands are in the POC document.
+macOS and Linux unit tests, TLS/client tests, strict Clippy and formatting pass. Native shared accounts, existing Git/signing and gh fixtures pass. The full Linux end-to-end suite passes, including Pi separation and contained closure enforcement. See the POC document for commands and environment details. Only disposable test credentials were used.
 
-Linux enforcement has not been run on this host. Run the Linux suite and add equivalent real-client enforcement evidence before calling the POC complete. Native tests use the existing disposable HTTP upstream hook; verified upstream TLS is separately covered by protocol tests. Bare launch still prompts per project. Generic runtime discovery, arbitrary native commands and production TLS rollout remain outside scope.
+## Subsequent work
+
+Bare launch still initializes each project. Generic runtime discovery, arbitrary native command launch, additional model protocols and production TLS rollout remain outside this POC. The one-day session CA has no renewal, mediated uploads require Content-Length, and pinned or proxy-ignoring clients are not supported by this experiment. Do not weaken enforcement to accommodate them.

@@ -12,7 +12,7 @@ or, when `XDG_CONFIG_HOME` is unset:
 ~/.config/slopbox/config.toml
 ```
 
-This file is policy authority. Do not place it inside the project. This document describes the current low-level schema, not the intended configuration model. The [authoritative project direction](direction.md#global-defaults-local-restrictions) requires reusable global defaults instead of repeated workspace-bound identities and accounts.
+This file is policy authority. Do not place it inside the project. Identities and accounts can use [shared defaults and directory rules](#shared-host-defaults-and-directory-rules); legacy workspace bindings remain supported. Generic runtime discovery remains subsequent work under the [authoritative project direction](direction.md).
 
 ## Project setup and launch
 
@@ -186,7 +186,7 @@ accounts = []
 
 Both `~/Projects/first` and `~/Work/second` select the same definitions without repository configuration. Directory rules match canonical directory trees and apply broadest first, regardless of declaration order. An omitted setting inherits; `git_identity = false` disables signing and `accounts = []` disables accounts. Account lists replace rather than append. Equally specific overlapping rules fail closed.
 
-Existing `workspace` bindings remain exact-workspace ceilings even when selected by name. Without an explicit selection, legacy workspace-bound entries still activate; unbound entries do not. Unknown selections fail before resolving secrets. Repository `.slopbox.toml` cannot define these grants. `slopbox status --verbose` shows selected access and matching host rule indexes without resolving secrets. Bare launch still requires per-project initialization.
+Existing `workspace` bindings remain exact-workspace ceilings even when selected by name. Without an explicit selection, legacy workspace-bound entries still activate; unbound entries do not. Unknown selections fail before resolving secrets. Repository `.slopbox.toml` cannot define these grants. `slopbox status --verbose` shows selected access, matching host rule indexes, and each selection's source (defaults, directory rule or legacy binding) without resolving secrets. Bare launch still requires per-project initialization.
 
 ### Experimental shared HTTPS transport
 

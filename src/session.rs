@@ -856,9 +856,32 @@ fn describe_status(
             &home,
             &paths.workspace,
         )?;
-        lines.push(format!(
-            "access-selection: host defaults; workspace rules {rules:?} (broadest first)"
-        ));
+        lines.push(format!("workspace-rules: {rules:?} (broadest first)"));
+        for (setting, default, rule) in [
+            (
+                "git_identity",
+                config.defaults.git_identity.is_some(),
+                rules
+                    .iter()
+                    .rev()
+                    .find(|&&index| config.workspaces[index].git_identity.is_some()),
+            ),
+            (
+                "accounts",
+                config.defaults.accounts.is_some(),
+                rules
+                    .iter()
+                    .rev()
+                    .find(|&&index| config.workspaces[index].accounts.is_some()),
+            ),
+        ] {
+            let source = match rule {
+                Some(index) => format!("host workspaces[{index}]"),
+                None if default => "host defaults".into(),
+                None => "legacy exact-workspace bindings".into(),
+            };
+            lines.push(format!("{setting}-source: {source}"));
+        }
         lines.push(String::new());
         lines.extend([
             format!("profile: {profile}"),

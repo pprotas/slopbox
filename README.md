@@ -68,7 +68,9 @@ nix run . -- stage apply <stage-id>
 nix run . -- stage discard <stage-id>
 ```
 
-Add `git_urls` to a workspace-bound authenticated route to use ordinary Git commands through the broker without changing `.git/config`; see [configuration](docs/configuration.md#git-smart-http).
+[Shared host defaults and directory rules](docs/configuration.md#shared-host-defaults-and-directory-rules) select reusable identities and accounts without repository configuration. Opt-in account TLS mediation supports ordinary HTTPS clients using an explicit proxy and session CA; see [POC scope](docs/poc-generic-capabilities.md).
+
+Add `git_urls` to an authenticated route to use ordinary Git commands through the broker without changing `.git/config`; see [configuration](docs/configuration.md#git-smart-http).
 
 The basic `cd project && slopbox` workflow and revocable network rules are implemented for Pi. The host approval view remains opt-in; native approval and actual-Pi terminal fixtures have passed on Apple Silicon/macOS 27. Standard Linux runtimes, broader macOS tooling and additional harness/provider integrations remain planned.
 
