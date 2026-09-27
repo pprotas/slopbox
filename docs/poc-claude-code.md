@@ -79,9 +79,22 @@ python3 tests/native/claude-live.py /absolute/slopbox /absolute/fixture/claude \
 
 The script verifies the original darwin-arm64 artifact checksum and deletes its disposable workspace/configuration state on exit. It does not read Keychain itself, change the caller's configuration, or install software.
 
+## Interactive use and resume
+
+`tests/native/claude-interactive.py` exercises the native production launcher with a real PTY and the same bounded OpenRouter key. It completes first-run theme/security/workspace prompts only in disposable state, reads a generated random marker through Claude, and exits through `/exit`. A second Slopbox invocation resumes the saved conversation, receives a typed prompt and returns the marker after its source file has been deleted and tools disabled. The test requires a new Haiku response in the transcript, not merely restored terminal history, and checks terminal restoration after each exit.
+
+This required a generic state-lifecycle change, not a Claude adapter: selected native commands now use a persistent per-workspace private home, while temporary storage remains per-run. Generic state is separate from legacy Pi state and is not traversed by host initialization. No host Claude configuration, login or transcript is imported or changed.
+
+```sh
+# Same host-side secret source and checksum-verified artifact as the headless test.
+python3 tests/native/claude-interactive.py /absolute/slopbox /absolute/fixture/claude --live
+```
+
+The test permits one file-read exchange and one recall exchange, with 1,024 output tokens per request and a 90-second deadline per launch. The provider-side credit limit remains the spending boundary. This paid test is opt-in, not CI. Claude warns that cross-session messaging is unavailable; named application IPC remains denied. The OpenRouter model identifier also triggers Claude's unknown-catalog warning; no larger context-window or accurate client-cost-estimation claim is made.
+
 ## Limits and reproduction
 
-These checks validate the **headless bearer-gateway path**, including live OpenRouter authentication on native macOS, not direct Anthropic `x-api-key` authentication, subscription login/refresh, interactive UI, MCP, plugins, remote control or every Claude feature. Account authentication injects `Authorization`, not arbitrary secret-bearing headers. There is no new fixed Anthropic broker or automatic harness/tool separation. A root-prefix POST route grants the corresponding upstream account authority, not inference-only authority.
+These checks validate the **bearer-gateway path**, including live OpenRouter authentication, basic terminal use and cross-run resume on native macOS, not direct Anthropic `x-api-key` authentication, subscription login/refresh, every interactive feature, MCP, plugins, remote control or every Claude feature. Account authentication injects `Authorization`, not arbitrary secret-bearing headers. There is no new fixed Anthropic broker or automatic harness/tool separation. A root-prefix POST route grants the corresponding upstream account authority, not inference-only authority.
 
 Install the pinned release in a disposable directory and verify its SHA-256 before execution. The Linux CI workflow pins the x86_64 artifact; remote CI has not run. Local artifacts from `https://downloads.claude.ai/claude-code-releases/2.1.283/`:
 

@@ -281,14 +281,22 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         .context("failed to create session runtime directory")?;
     #[cfg(target_os = "macos")]
     let (private_home, tool_home) = (
-        session_dir.path().join("home"),
+        if selected_runtime.is_some() {
+            let home = paths.box_root.join("native-home");
+            native::runtime::prepare_generic_home(&home)?;
+            home
+        } else {
+            session_dir.path().join("home")
+        },
         session_dir.path().join("tool-home"),
     );
     #[cfg(target_os = "linux")]
     let (private_home, tool_home) = (paths.private_home.clone(), paths.tool_home.clone());
     #[cfg(target_os = "macos")]
     {
-        create_private_home(&private_home)?;
+        if selected_runtime.is_none() {
+            create_private_home(&private_home)?;
+        }
         create_private_home(&tool_home)?;
     }
     #[cfg(target_os = "linux")]
@@ -342,15 +350,6 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         let mut brokers = brokers;
         let session = native::Session::start(&executor, &mut brokers)?;
         (session, brokers)
-    };
-    #[cfg(target_os = "macos")]
-    let private_home = if selected_runtime.is_some() {
-        // Keep per-run application paths short and inside owned session state.
-        let home = native_session.directory().join("home");
-        create_private_home(&home)?;
-        home
-    } else {
-        private_home
     };
     #[cfg(target_os = "macos")]
     let dev_environment = prepare_dev_environment(

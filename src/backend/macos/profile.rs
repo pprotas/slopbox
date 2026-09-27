@@ -67,6 +67,7 @@ pub(super) fn render(
         },
         quoted(plan.workspace.source)?
     ));
+    let temporary = plan.session_dir.join("tmp");
     let mut runtime_paths = vec![home, plan.workspace.source];
     if let Some(config) = config {
         profile.push_str(&format!(
@@ -82,12 +83,16 @@ pub(super) fn render(
         profile.push_str(&format!(
             r#"(allow signal (target same-sandbox))
 (allow file-read* (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/zero"))
-(allow process-exec (subpath {home}) (subpath {workspace}))
+(deny file-write-unlink (literal {home}))
+(allow file-read* file-write* (subpath {temporary}))
+(allow process-exec (subpath {home}) (subpath {workspace}) (subpath {temporary}))
 (allow system-socket (socket-domain AF_UNIX))
 "#,
             home = quoted(home)?,
             workspace = quoted(plan.workspace.source)?,
+            temporary = quoted(&temporary)?,
         ));
+        runtime_paths.push(&temporary);
         for file in &plan.runtime.native.selected_files {
             profile.push_str(&format!(
                 "(allow file-read* process-exec (literal {}))\n",

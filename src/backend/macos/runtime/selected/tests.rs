@@ -127,6 +127,31 @@ fn selected_native_scripts_require_supported_shebangs() {
 }
 
 #[test]
+fn generic_home_rejects_aliases_and_leaves_guest_contents_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    let outside = directory.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&outside, &home).unwrap();
+    assert!(super::super::prepare_generic_home(&home).is_err());
+    assert_eq!(fs::metadata(&outside).unwrap().mode() & 0o777, 0o755);
+    fs::remove_file(&home).unwrap();
+    super::super::prepare_generic_home(&home).unwrap();
+    std::os::unix::fs::symlink(&outside, home.join(".local")).unwrap();
+    fs::write(home.join("saved"), "private state").unwrap();
+    super::super::prepare_generic_home(&home).unwrap();
+    assert_eq!(
+        fs::read_to_string(home.join("saved")).unwrap(),
+        "private state"
+    );
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(super::super::prepare_generic_home(&home).is_err());
+    assert_eq!(fs::metadata(&home).unwrap().mode() & 0o777, 0o755);
+}
+
+#[test]
 fn selected_native_runtime_rejects_setid_executables() {
     let (_directory, host) = fixture();
     let executable = host.home.join("echo");

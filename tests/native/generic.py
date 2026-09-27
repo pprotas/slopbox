@@ -99,46 +99,59 @@ const connect = options => new Promise((resolve, reject) => {
 });
 await assert.rejects(connect({host:'127.0.0.1', port:fixture.port}), {code:'EPERM'});
 await assert.rejects(connect({path:fixture.socket}), {code:'EPERM'});
-const alias = path.join(process.env.HOME, 'escape.sock');
+const workspace = process.cwd();
+process.chdir(process.env.HOME);
+const alias = 'escape.sock';
 fs.symlinkSync(fixture.socket, alias);
 await assert.rejects(connect({path:alias}), {code:'EPERM'});
-const workspaceAlias = path.join(process.env.HOME, 'workspace');
-fs.symlinkSync(process.cwd(), workspaceAlias);
-for (const address of ['denied.sock', path.join(workspaceAlias, 'aliased.sock')]) {
+const workspaceAlias = 'workspace';
+fs.symlinkSync(workspace, workspaceAlias);
+for (const address of [path.join(workspace, 'denied.sock'), path.join(workspaceAlias, 'aliased.sock')]) {
   await assert.rejects(new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once('error', reject);
     server.listen(address, () => { server.close(); resolve(); });
   }), {code:'EPERM'});
 }
-fs.writeFileSync('ready', 'ready');
-for (let attempts = 0; !fs.existsSync('late.sock') && attempts < 500; attempts++) {
+const lateSocket = path.join(workspace, 'late.sock');
+fs.writeFileSync(path.join(workspace, 'ready'), 'ready');
+for (let attempts = 0; !fs.existsSync(lateSocket) && attempts < 500; attempts++) {
   await new Promise(resolve => setTimeout(resolve, 10));
 }
-assert(fs.lstatSync('late.sock').isSocket());
-await assert.rejects(connect({path:path.resolve('late.sock')}), {code:'EPERM'});
+assert(fs.lstatSync(lateSocket).isSocket());
+await assert.rejects(connect({path:lateSocket}), {code:'EPERM'});
 await assert.rejects(connect({path:path.join(workspaceAlias, 'late.sock')}), {code:'EPERM'});
-const linkedSocket = path.join(process.env.HOME, 'linked.sock');
-try { fs.linkSync('late.sock', linkedSocket); }
+const linkedSocket = 'linked.sock';
+try { fs.linkSync(lateSocket, linkedSocket); }
 catch (error) { assert(['EPERM', 'EXDEV', 'EOPNOTSUPP'].includes(error.code), error); }
 if (fs.existsSync(linkedSocket)) {
   await assert.rejects(connect({path:linkedSocket}), {code:'EPERM'});
 }
-const movedSocket = path.join(process.env.HOME, 'moved.sock');
-try { fs.renameSync('late.sock', movedSocket); }
+const movedSocket = 'moved.sock';
+try { fs.renameSync(lateSocket, movedSocket); }
 catch (error) { assert(['EPERM', 'EXDEV', 'EOPNOTSUPP'].includes(error.code), error); }
 if (fs.existsSync(movedSocket)) {
   await assert.rejects(connect({path:movedSocket}), {code:'EPERM'});
 }
-const own = path.join(process.env.HOME, 'own.sock');
+const own = 'own.sock';
 await assert.rejects(new Promise((resolve, reject) => {
   const server = net.createServer();
   server.once('error', reject);
   server.listen(own, () => { server.close(); resolve(); });
 }), {code:'EPERM'});
+process.chdir(workspace);
+assert.throws(() => fs.renameSync(process.env.HOME, path.resolve('stolen-home')), {code:'EPERM'});
+fs.symlinkSync(fixture.hostData, path.join(process.env.HOME, '.local'));
+fs.symlinkSync(fixture.hostData, path.join(process.env.HOME, '.pi'));
+fs.writeFileSync('private-home-path', process.env.HOME);
+fs.writeFileSync(path.join(process.env.HOME, 'saved-state'), 'private-home-passed');
+fs.writeFileSync(path.join(process.env.TMPDIR, 'temporary-state'), 'temporary');
+fs.writeFileSync(path.join(process.env.HOME, 'old-tmp'), process.env.TMPDIR);
 fs.writeFileSync('passed', 'generic-native-passed');
 console.log('generic-native-passed');
 """)
+    host_data = root / "host-data"
+    host_data.mkdir()
     (root / "workspace/fixture.json").write_text(
         json.dumps(
             {
@@ -146,6 +159,7 @@ console.log('generic-native-passed');
                 "secret": str(secret),
                 "config": str(config),
                 "hostPid": os.getpid(),
+                "hostData": str(host_data),
                 "socket": str(root / "host.sock"),
                 "port": tcp.getsockname()[1],
             }
@@ -165,6 +179,10 @@ console.log('generic-native-passed');
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert (root / "workspace/passed").read_text() == "generic-native-passed"
+        private_home = Path((root / "workspace/private-home-path").read_text())
+        old_temporary = Path((private_home / "old-tmp").read_text())
+        assert old_temporary.is_relative_to(root)
+        assert not old_temporary.exists(), "Per-run temporary storage was retained"
         publisher.join(timeout=2)
         late_socket.close()
         for name in ["late.sock", "denied.sock", "aliased.sock"]:
@@ -182,7 +200,13 @@ console.log('generic-native-passed');
                 "--",
                 "node",
                 "-e",
-                "require('node:assert/strict').throws(() => require('node:fs').writeFileSync('denied', 'no'), {code:'EPERM'});",
+                (
+                    "const assert = require('node:assert/strict'), fs = require('node:fs');"
+                    "assert.throws(() => fs.writeFileSync('denied', 'no'), {code:'EPERM'});"
+                    "assert.equal(fs.readFileSync(process.env.HOME+'/saved-state', 'utf8'), 'private-home-passed');"
+                    "assert.notEqual(fs.readFileSync(process.env.HOME+'/old-tmp', 'utf8'), process.env.TMPDIR);"
+                    "assert(!fs.existsSync(process.env.TMPDIR+'/temporary-state'));"
+                ),
             ],
             check=False,
             env=env,
@@ -194,6 +218,9 @@ console.log('generic-native-passed');
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert not (root / "workspace/denied").exists()
+        assert not list(host_data.iterdir()), (
+            "Host initialization followed guest state aliases"
+        )
         result = subprocess.run(
             [
                 str(binary),
@@ -214,6 +241,33 @@ console.log('generic-native-passed');
             timeout=60,
         )
         assert result.returncode == 7, result.stdout + result.stderr
+        other = root / "unrelated-workspace"
+        other.mkdir()
+        previous_home = (root / "workspace/private-home-path").read_text()
+        result = subprocess.run(
+            [
+                str(binary),
+                "run",
+                "--dev-env",
+                "none",
+                "--",
+                "node",
+                "-e",
+                (
+                    "const assert=require('node:assert/strict'),fs=require('node:fs');"
+                    "assert(!fs.existsSync(process.env.HOME+'/saved-state'));"
+                    f"assert.throws(() => fs.readFileSync({json.dumps(previous_home + '/saved-state')}), {{code:'EPERM'}});"
+                ),
+            ],
+            check=False,
+            env=env,
+            cwd=other,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
         node.chmod(0o4755)
         assert node.stat().st_mode & 0o4000
         result = subprocess.run(
@@ -233,6 +287,7 @@ console.log('generic-native-passed');
             "PASS: native generic commands, credential/socket/alias/network/signal denials"
         )
         print("PASS: read-only workspace and command exit-status propagation")
+        print("PASS: persistent per-workspace home and private temporary storage")
     finally:
         stop.set()
         publisher.join(timeout=2)

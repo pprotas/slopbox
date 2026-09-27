@@ -430,7 +430,10 @@ impl Session {
             Ok(values)
         };
         if generic {
+            let temporary = plan.session_dir.join("tmp");
+            fs::DirBuilder::new().mode(0o700).create(&temporary)?;
             let mut values = environment(false)?;
+            values.push(format!("TMPDIR={}", temporary.display()));
             values.extend(["USER=slopbox".into(), "LOGNAME=slopbox".into()]);
             values.push(format!(
                 "TERM={}",

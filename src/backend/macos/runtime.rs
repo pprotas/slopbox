@@ -488,6 +488,23 @@ fn executable(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0)
 }
 
+pub(crate) fn prepare_generic_home(home: &Path) -> Result<()> {
+    // Guest-owned contents must never be traversed or repaired by host initialization.
+    match fs::DirBuilder::new().mode(0o700).create(home) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    let metadata = fs::symlink_metadata(home)?;
+    ensure!(
+        metadata.is_dir()
+            && metadata.uid() == unsafe { libc::getuid() }
+            && metadata.mode() & 0o077 == 0,
+        "native private home is not a private directory"
+    );
+    Ok(())
+}
+
 pub(crate) fn prepare_tool_cache(home: &Path) -> Result<PathBuf> {
     // Only this sandbox-owned cache persists, not the session's HOME or host
     // ~/.cargo. Refuse symlinks before host creation/chmod can follow them.
