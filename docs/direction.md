@@ -18,7 +18,17 @@ Use stable boundaries:
 - Executables, environments, and permitted runtime files rather than a prerequisite list of recognized installers.
 - Command execution rather than a particular harness's settings and extension system. Harness-specific resource imports and UI conveniences belong above the basic execution contract.
 
-Some coupling is justified: OS enforcement mechanisms, model-provider authentication and wire protocols, and genuinely different capabilities. Keep it at those boundaries. Optional compatibility helpers must not become prerequisites for ordinary use. A general plugin framework is not itself a solution.
+Some coupling is justified: OS enforcement mechanisms, model-provider authentication and wire protocols, and genuinely different capabilities. Keep it at those boundaries. A general plugin framework is not itself a solution.
+
+## Harness integrations live outside this repository
+
+Slopbox must not ship particular harness integrations, including optional built-in adapters. Pi extensions, Claude-side modifications and equivalent integrations belong in external projects or packages. They own harness-specific configuration, resource discovery, tool hooks, provider registration and UI behavior.
+
+Slopbox owns the generic execution, resource, role, credential and signing interfaces those integrations consume. An extension can route a tool invocation into a restricted role; Slopbox must enforce that role independently. Extension presence alone is not evidence that every tool path is separated. Requested stronger contracts must fail explicitly when unavailable, not silently fall back to shared authority.
+
+There should be one harness-neutral configuration and launch path, not mutually exclusive Pi and generic modes. The existing embedded Pi extension, Pi preparation and hardcoded Pi launch are migration work to extract, not a precedent for more integrations. Merely moving them into another module in this repository does not satisfy this boundary.
+
+Compatibility fixtures may exercise real harnesses and separately supplied integrations. They must not become production adapters or prerequisites for ordinary command execution. Preserve the existing enforcement guarantees and regression evidence during extraction.
 
 ## Resolve the security contracts explicitly
 
