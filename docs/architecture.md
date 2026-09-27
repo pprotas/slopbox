@@ -1,6 +1,6 @@
 # Modular architecture
 
-Preserve working Pi/Linux behavior while introducing three independent adapter families.
+The [project direction](direction.md) is authoritative. This document records existing boundaries and earlier implementation plans; per-product adapters are not the default expansion strategy. Preserve working enforcement while moving toward the general execution and runtime contracts.
 
 Pi preparation, Linux execution, and the current providers are extracted. `harness/pi.rs` returns a typed harness plan. `session.rs` owns policy, workspace/stage state, brokers, and resource lifetimes. `backend/linux/` owns namespace construction, inner-tool enforcement, and the namespace probe. `backend/nix.rs` shares flake selection, realization and closure validation; each backend owns runtime grants and activation. Its execution plan borrows paths and selected broker endpoints, not live broker objects or credentials.
 
@@ -88,7 +88,7 @@ Harness adapters receive model/protocol information and broker connection detail
 
 A provider is not a wire protocol: Copilot authentication/account discovery is shared while Messages, Responses, or Chat Completions is selected for the harness/model pair. Bedrock also needs its own upstream authentication and streaming handling. Share transport where genuinely common; add translation only for a demonstrated requirement, not a lowest-common-denominator message format.
 
-## Refactor sequence
+## Earlier refactor sequence
 
 1. Pi resource/configuration/launch preparation is extracted into `harness/pi.rs`, preserving generated configuration and tests.
 2. Session/workspace orchestration is separated from Linux execution and inner-tool enforcement, preserving session-private ownership and cleanup.

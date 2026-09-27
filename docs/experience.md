@@ -1,6 +1,6 @@
 # User experience
 
-Slopbox should let someone run a coding agent without learning namespaces, credential brokers, or network proxies.
+Slopbox should let someone run a coding agent without learning namespaces, credential brokers, or network proxies. The [authoritative project direction](direction.md) governs this experience; current per-project setup is not the target onboarding requirement.
 
 The primary product promise is:
 
@@ -35,7 +35,7 @@ Distinguish general tool internet, model access, and authenticated account route
 
 Implementation details belong in verbose diagnostics. Profiles, accounts, identities, harnesses, and grants are useful internal concepts, not prerequisites for starting a session.
 
-## First run
+## Current first-run setup
 
 The normal command is:
 
@@ -139,33 +139,9 @@ Cancellation, normal exit, rendering failures, and crashes must leave sessions a
 
 ## Configuration ergonomics
 
-Users should not need to construct four HTTP routes to connect one Forgejo repository. A high-level host configuration might look like:
+Follow the [global-defaults configuration direction](direction.md#global-defaults-local-restrictions): define identities and accounts once, reuse host defaults across projects, and add workspace restrictions only where needed. An ordinary new repository should normally need no setup or configuration file.
 
-```toml
-[accounts.forgejo-bot]
-type = "forgejo"
-url = "https://forgejo.example.com"
-username = "bot"
-secret = "sops:/absolute/path/outside/project/secrets.yaml#FORGEJO_TOKEN"
-private_network = true
-git_identity = "bot"
-
-[identities.bot]
-name = "bot"
-email = "bot@example.com"
-signing_key = "SHA256:..."
-
-[[projects]]
-path = "~/Projects/example"
-agent = "pi"
-profile = "developer"
-account = "forgejo-bot"
-repository = "org/example"
-```
-
-This is a design target, not the current schema. Add high-level configuration incrementally around the supported workflow rather than requiring a general integration framework first. Account setup should propose the narrow routes needed and disclose any broader route required for CLI compatibility. Provider-side permissions remain part of the boundary.
-
-Most users should configure these through first launch and `accounts`. Keep raw routes as an advanced escape hatch and show generated grants under `status --verbose`.
+Do not replace today's repetitive bindings with per-forge templates or mandatory project entries. A wizard cannot substitute for a reusable configuration model. Keep backend details out of ordinary configuration and expose effective grants and their sources through inspection. No replacement TOML schema is specified yet; [configuration.md](configuration.md) documents the current interface.
 
 ### Configuration authority
 

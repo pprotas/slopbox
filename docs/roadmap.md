@@ -1,14 +1,14 @@
 # Roadmap
 
-The NixOS/Pi workflow is the working baseline. Next, make Slopbox usable on standard Linux and an Apple silicon Mac, then add Claude Code, Codex CLI, and OpenCode. Preserve the current security boundary rather than treating portability as permission to pass credentials into guests.
+The [project direction](direction.md) is authoritative. Prioritize generic execution/runtime contracts, shared credential transport, and reusable global configuration before adding more product-specific integrations. Preserve existing security and reliability work. The numbered platform/provider sections below are earlier backlog context, not the execution order.
 
 ## Repository and CI hosting
 
-The approved cutover makes GitHub the writable primary, with one signed root commit for `v0.1.0` and semantic versioning afterward. Pawel reports the old Forgejo push mirror disabled. Keep its existing history as an archive; no reverse mirror or visibility change is implied.
+GitHub is the private writable primary. [`v0.1.0`](https://github.com/pprotas/slopbox/releases/tag/v0.1.0) is published from a signed initial commit; future work uses normal commits and semantic versioning. Pawel reports the old Forgejo push mirror disabled. Its history remains an archive; existing issue links are historical and the issue tracker has not been migrated.
 
-GitHub Actions replaces the Forgejo workflow. The proposed checks cover Linux Rust/package builds, Linux enforcement in a NixOS VM, and Apple Silicon Rust/package checks on the official macOS 27 `xcode-27` preview image. These workflows have not run yet. Runner availability/billing and native Seatbelt, launchd recovery and PTY conformance remain separate validation work; an ordinary macOS build does not establish native enforcement.
+GitHub Actions checks passed for the release candidate, main, and tag: Linux Rust/package builds, Linux enforcement in a NixOS VM, and Apple Silicon Rust/package checks on the macOS 27 `xcode-27` preview image. Hosted native Seatbelt, launchd recovery and PTY conformance remain separate validation work; an ordinary macOS build does not establish native enforcement.
 
-Host GitHub credentials come from `gh auth token`, not repository-owned secrets. The clean release tree, authenticated transport, signature, CI and remote lease must be verified before replacing main. Existing Forgejo issue links are historical; Git history migration does not migrate the issue tracker.
+Host GitHub credentials come from `gh auth token`, not repository-owned secrets. Published version tags must not be moved as part of normal development.
 
 ## Current baseline
 

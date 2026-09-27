@@ -1,6 +1,6 @@
 # Harness and provider targets
 
-These are implementation targets, not a list of currently supported combinations. Today Slopbox's validated harness is Pi on its NixOS-oriented Linux runtime, with OpenRouter and OpenAI Codex model brokers.
+The [project direction](direction.md) is authoritative. These are backlog candidates, not an implementation sequence or a list of supported combinations. Establish the generic contracts before expanding this matrix. Pi and the existing OpenRouter/OpenAI Codex brokers remain regression baselines.
 
 ## Target matrix
 
@@ -23,9 +23,9 @@ Validate account-derived endpoints before sending credentials. Honor the organiz
 
 For work Bedrock access, the host user runs `aws sso login` with the configured named profile and completes browser/Okta authentication. The broker resolves temporary AWS credentials and signs the permitted Bedrock requests. Neither the SSO cache nor temporary role credentials enter the guest. Region and model/inference-profile selection are host-controlled. An expired SSO session should produce a host-side re-login instruction, not a credential prompt inside the harness.
 
-## Minimum adapter contract
+## Harness/tool-separated integration contract
 
-Before a harness is called supported:
+An integration claiming separate harness and tool authority must:
 
 1. Launch it with session-private, host-generated configuration and explicit imported resources.
 2. Keep model access out of project shell/build subprocesses; test attempted access rather than trusting a hook's name.
@@ -35,7 +35,7 @@ Before a harness is called supported:
 
 Hooks, custom providers, and shell wrappers are candidates, not assumed enforcement boundaries. If a harness cannot enforce the required tool boundary through its integration points, keep it experimental or unsupported until another design is validated. Do not silently fall back to sharing the model broker with all project processes.
 
-Basic support does not require Pi's resource discovery or extension ergonomics. Native harness sandboxing may add protection but does not replace Slopbox's outer boundary or host-owned policy.
+Such integration does not require Pi's resource discovery or extension ergonomics. Native harness sandboxing may add protection but does not replace Slopbox's outer boundary or host-owned policy.
 
 ## Verification sources
 

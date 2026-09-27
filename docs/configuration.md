@@ -12,7 +12,7 @@ or, when `XDG_CONFIG_HOME` is unset:
 ~/.config/slopbox/config.toml
 ```
 
-This file is policy authority. Do not place it inside the project. The current schema is intentionally low-level while the higher-level account/project setup described in [experience.md](experience.md) is developed.
+This file is policy authority. Do not place it inside the project. This document describes the current low-level schema, not the intended configuration model. The [authoritative project direction](direction.md#global-defaults-local-restrictions) requires reusable global defaults instead of repeated workspace-bound identities and accounts.
 
 ## Project setup and launch
 

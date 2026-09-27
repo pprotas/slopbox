@@ -74,10 +74,11 @@ The basic `cd project && slopbox` workflow and revocable network rules are imple
 
 ## Documentation
 
+- **[Project direction — authoritative](docs/direction.md):** general-purpose isolation, integration boundaries, global configuration, and development priorities. Supersedes conflicting older plans.
 - [Concepts](docs/concepts.md): identities, accounts, harnesses, projects, sessions, profiles, and grants.
 - [User experience](docs/experience.md): the intended launch, approval, recovery, and review workflow.
 - [Configuration](docs/configuration.md): current host and project configuration.
-- [Architecture](docs/architecture.md): backend, harness, and provider boundaries and the refactor plan.
+- [Architecture](docs/architecture.md): existing backend, harness, and provider boundaries and earlier refactor plans.
 - [Platforms](docs/platforms.md): Linux, native macOS/Seatbelt, and VM backend plans.
 - [Mac handoff](docs/macos-handoff.md): checkpoint history, validation and next steps for a new Pi session.
 - [Integrations](docs/integrations.md): Claude Code, Codex CLI, OpenCode, Bedrock/SSO, and Copilot targets.
