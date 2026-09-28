@@ -4,13 +4,13 @@ import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:https";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const [slopbox] = process.argv.slice(2);
 assert(slopbox);
-const root = mkdtempSync(join(tmpdir(), "slopbox-accounts-"));
+// Keep broker socket paths below Linux's sockaddr_un limit, including in CI.
+const root = mkdtempSync("/tmp/slopbox-accounts-");
 const home = join(root, "home");
 const config = join(home, "config/slopbox/config.toml");
 const key = join(root, "signing-key");

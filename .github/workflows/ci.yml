@@ -35,6 +35,7 @@ jobs:
       - run: nix develop --command cargo fmt --manifest-path tests/macos-seatbelt/Cargo.toml --check
       - run: nix develop --command nixfmt --check flake.nix tests/nixos.nix tests/native/nix/flake.nix
       - run: nix develop --command cargo test --locked
+      - run: nix develop --command cargo test --locked gateway::tls -- --include-ignored
       - name: Read-only GitHub CLI configuration
         run: |
           gh_path=$(command -v gh)
