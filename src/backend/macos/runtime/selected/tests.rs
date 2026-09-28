@@ -1,7 +1,8 @@
 use super::*;
+use std::ffi::OsString;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
-fn fixture() -> (tempfile::TempDir, Host) {
+pub(super) fn fixture() -> (tempfile::TempDir, Host) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("home");
@@ -90,7 +91,7 @@ fn selected_native_runtime_rejects_private_paths_and_hard_links() {
 }
 
 #[test]
-fn selected_native_runtime_rejects_relative_paths_and_unsupported_grants() {
+fn selected_native_runtime_rejects_relative_paths_and_missing_resources() {
     let (_directory, host) = fixture();
     for executable in ["./echo", "../echo", "missing-command", "/bin/../bin/echo"] {
         let selection = RuntimeSelection {
@@ -117,13 +118,22 @@ fn selected_native_scripts_require_supported_shebangs() {
         executables: vec![executable.clone()],
         ..Default::default()
     };
-    for contents in ["echo no", "#!/usr/bin/env bash\n", "#!/usr/bin/python3\n"] {
+    for contents in [
+        "echo no",
+        "#!/usr/bin/env -S bash -e\n",
+        "#!/usr/bin/python3\n",
+    ] {
         fs::write(&executable, contents).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(prepare_for(&selection, &host).is_err());
     }
-    fs::write(&executable, "#!/bin/bash\nprintf accepted\n").unwrap();
-    assert!(prepare_for(&selection, &host).is_ok());
+    for contents in [
+        "#!/bin/bash\nprintf accepted\n",
+        "#!/usr/bin/env bash\nprintf accepted\n",
+    ] {
+        fs::write(&executable, contents).unwrap();
+        assert!(prepare_for(&selection, &host).is_ok());
+    }
 }
 
 #[test]

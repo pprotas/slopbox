@@ -1,5 +1,7 @@
 //! Host runtime discovery, not policy or a package manager. PATH selects binaries
 //! within recognized installations; it never creates a recursive filesystem grant.
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -20,6 +22,7 @@ pub(crate) struct NativeRuntime {
     pub config: Option<Config>,
     pub tools: DeveloperTools,
     pub selected_files: Vec<PathBuf>,
+    pub selected_roots: Vec<PathBuf>,
     pub system_data: Vec<PathBuf>,
 }
 
@@ -99,6 +102,9 @@ fn developer_directory(
 struct Boundary {
     home: PathBuf,
     protected: Vec<PathBuf>,
+    protected_ids: BTreeSet<(u64, u64)>,
+    container_ids: BTreeSet<(u64, u64)>,
+    ancestry: RefCell<BTreeMap<PathBuf, bool>>,
 }
 
 impl Boundary {
@@ -111,6 +117,7 @@ impl Boundary {
             host.workspace.clone(),
             host.config.clone(),
             host.data.join("slopbox"),
+            PathBuf::from("/System/Volumes"),
         ];
         for name in [
             ".ssh",
@@ -139,18 +146,54 @@ impl Boundary {
             "/private/var/tmp/slopbox-{}",
             unsafe { libc::getuid() }
         )));
-        Ok(Self { home, protected })
+        // realpath preserves case aliases and APFS volume aliases.
+        let mut protected_ids = BTreeSet::new();
+        let mut container_ids = BTreeSet::new();
+        for path in &protected {
+            if let Some(id) = file_id(path)? {
+                protected_ids.insert(id);
+            }
+        }
+        for path in protected.iter().chain(std::iter::once(&home)) {
+            for ancestor in path.ancestors() {
+                if let Some(id) = file_id(ancestor)? {
+                    container_ids.insert(id);
+                }
+            }
+        }
+        Ok(Self {
+            home,
+            protected,
+            protected_ids,
+            container_ids,
+            ancestry: RefCell::new(BTreeMap::new()),
+        })
     }
 
     fn check(&self, path: &Path) -> Result<()> {
         absolute(path)?;
         ensure!(
             !self.home.starts_with(path)
-                && self.protected.iter().all(|other| !overlaps(path, other)),
+                && self.protected.iter().all(|other| !overlaps(path, other))
+                && !file_id(path)?.is_some_and(|id| self.container_ids.contains(&id))
+                && !self.private_ancestor(path)?,
             "native runtime root overlaps private state or workspace: {}",
             path.display()
         );
         Ok(())
+    }
+
+    fn private_ancestor(&self, path: &Path) -> Result<bool> {
+        if let Some(private) = self.ancestry.borrow().get(path) {
+            return Ok(*private);
+        }
+        let private = file_id(path)?.is_some_and(|id| self.protected_ids.contains(&id))
+            || match path.parent() {
+                Some(parent) => self.private_ancestor(parent)?,
+                None => false,
+            };
+        self.ancestry.borrow_mut().insert(path.to_owned(), private);
+        Ok(private)
     }
 
     fn installation(&self, path: &Path) -> Result<Option<PathBuf>> {
@@ -169,6 +212,15 @@ impl Boundary {
         let canonical = path.canonicalize()?;
         self.check(&canonical)?;
         Ok(Some(canonical))
+    }
+}
+
+fn file_id(path: &Path) -> Result<Option<(u64, u64)>> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(Some((metadata.dev(), metadata.ino()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("inspect native resource identity {}", path.display())),
     }
 }
 
@@ -590,6 +642,7 @@ pub(crate) fn prepare_runtime(
             config: Some(config),
             tools,
             selected_files: Vec::new(),
+            selected_roots: Vec::new(),
             system_data: Vec::new(),
         },
     })
@@ -873,7 +926,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("native installation is not a directory")
+                .contains("native runtime root overlaps private state or workspace")
         );
     }
 

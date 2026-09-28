@@ -55,6 +55,32 @@ fn native_cli_generic_commands() {
 }
 
 #[test]
+#[ignore = "host integration: set SLOPBOX_TEST_NODE and SLOPBOX_TEST_SLOPBOX; requires Xcode clang"]
+fn native_cli_runtime_bundles() {
+    let output = std::process::Command::new("/usr/bin/python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/native/runtime-bundles.py"
+        ))
+        .arg(std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required"))
+        .arg(std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"))
+        .env_clear()
+        .current_dir("/")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("library aliases, isolation and rejection passed")
+    );
+}
+
+#[test]
 #[ignore = "host integration: set SLOPBOX_TEST_CLAUDE, SLOPBOX_TEST_NODE and SLOPBOX_TEST_SLOPBOX"]
 fn native_cli_claude_harness() {
     let output = std::process::Command::new("/usr/bin/python3")

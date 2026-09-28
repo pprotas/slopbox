@@ -118,6 +118,13 @@ pub(super) fn render(
             temporary = quoted(&temporary)?,
         ));
         runtime_paths.push(&temporary);
+        for root in &plan.runtime.native.selected_roots {
+            profile.push_str(&format!(
+                "(allow file-read* process-exec (subpath {}))\n",
+                quoted(root)?
+            ));
+            runtime_paths.push(root);
+        }
         for file in &plan.runtime.native.selected_files {
             profile.push_str(&format!(
                 "(allow file-read* process-exec (literal {}))\n",
@@ -346,6 +353,7 @@ mod tests {
                     tool_timeout_seconds: 10,
                 }),
                 selected_files: Vec::new(),
+                selected_roots: Vec::new(),
                 system_data: Vec::new(),
                 tools,
             },
@@ -434,6 +442,7 @@ mod tests {
                     tool_timeout_seconds: 10,
                 }),
                 selected_files: Vec::new(),
+                selected_roots: Vec::new(),
                 system_data: Vec::new(),
                 tools: DeveloperTools::default(),
             },

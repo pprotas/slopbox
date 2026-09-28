@@ -136,7 +136,7 @@ See [executable limits](poc-nixless-linux.md) and [bundle behavior and non-Pi ha
 
 The same host-owned `[runtime].executables` selection supports generic native commands without `[macos]` Pi/Node configuration. It requires `runtime=host` and `harness=none`. An explicit runtime selection makes `--dev-env auto` use those host resources without evaluating a project flake; an explicit `--dev-env flake` remains an error. Bare names select system commands; other installations need absolute or `~/` paths.
 
-This native slice accepts host-architecture Mach-O executables using system libraries and simple bash/sh scripts. `bundles`, `dependency_roots` and non-system dylibs are rejected rather than ignored. Generic subprocesses retain outer account/model authority; there is no native `tool-run` role in this mode. See [runtime grants and limitations](poc-native-runtime.md).
+Native discovery accepts host-architecture Mach-O executables and dylib dependencies, plus simple scripts with explicitly selected interpreters. `bundles` grants whole read-only application trees; `dependency_roots` authorizes discovered dylib files without exposing those directories. Loader-relative dependencies and known runpath stacks are resolved without executing selected programs. Generic subprocesses retain outer account/model authority; there is no native `tool-run` role in this mode. See [runtime grants and limitations](poc-native-runtime.md).
 
 ## Pi resources
 
@@ -265,7 +265,7 @@ Existing `workspace` bindings remain exact-workspace ceilings even when selected
 
 ### Experimental shared HTTPS transport
 
-`proxy = true` opts a route into TLS mediation; existing routes remain unchanged. Tools receive `SLOPBOX_ACCOUNT_PROXY` and a read-only public `SLOPBOX_ACCOUNT_CA`. Neither the host trust store nor the client's normal proxy/trust environment is changed. For example:
+`proxy = true` opts a route into TLS mediation; existing routes remain unchanged. Tools receive `SLOPBOX_ACCOUNT_PROXY` and a read-only public `SLOPBOX_ACCOUNT_CA`. Host trust is unchanged, and clients must explicitly trust the session CA. The ordinary proxy also mediates these origins before general-egress handling; other destinations retain normal approval checks. There is no raw-tunnel fallback for a mediated origin. Clients can use their normal proxy settings, or select the account-only endpoint explicitly. For example:
 
 ```bash
 curl --proxy "$SLOPBOX_ACCOUNT_PROXY" --noproxy '' \

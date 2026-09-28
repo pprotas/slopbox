@@ -394,12 +394,14 @@ fn configured_launch_rejects_unsupported_capabilities_before_resolving_secrets()
 }
 
 #[test]
-fn unsupported_selected_runtime_grants_fail_before_secrets_or_state_on_macos() {
+fn invalid_selected_runtime_grants_fail_before_secrets_or_state_on_macos() {
     let fixture = Fixture::new();
     fixture.configure_native();
     let path = fixture.root.path().join("config/slopbox/config.toml");
     let mut config = fs::read_to_string(&path).unwrap();
-    config.push_str("\n[runtime]\nexecutables = [\"curl\"]\nbundles = [\"/some/bundle\"]\n");
+    config.push_str(
+        "\n[runtime]\nexecutables = [\"curl\"]\ndependency_roots = [\"/some/library-root\"]\n",
+    );
     fs::write(path, config).unwrap();
     let output = fixture
         .command()
@@ -408,10 +410,7 @@ fn unsupported_selected_runtime_grants_fail_before_secrets_or_state_on_macos() {
         .unwrap();
     assert!(!output.status.success());
     let error = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        error.contains("bundles and dependency_roots are not implemented on macOS"),
-        "{error}"
-    );
+    assert!(error.contains("resolve native dependency root"), "{error}");
     assert!(!error.contains("SLOPBOX_MISSING_SECRET"), "{error}");
     fixture.assert_untouched();
 }

@@ -35,7 +35,7 @@ cargo build --locked
 
 ## Generic commands
 
-Host-owned `[runtime].executables` enables ordinary command launch with `harness=none`. This bounded slice accepts native Mach-O/system-library executables and simple shell scripts, not application bundles or arbitrary dylib discovery. It preserves the native supervisor and Seatbelt boundary; subprocesses share outer authority rather than acquiring Pi's tool separation. See [configuration and enforcement tests](poc-native-runtime.md) and [native Claude Code acceptance](poc-claude-code.md).
+Host-owned `[runtime].executables` enables ordinary command launch with `harness=none`. It accepts native Mach-O executables, explicitly selected application bundles, and dylib closure discovery beneath authorized dependency roots. Simple scripts require selected interpreters; unresolvable loader contexts fail closed. It preserves the native supervisor and Seatbelt boundary; subprocesses share outer authority rather than acquiring Pi's tool separation. See [configuration and enforcement tests](poc-native-runtime.md) and [native Claude Code acceptance](poc-claude-code.md).
 
 ## Run Pi
 

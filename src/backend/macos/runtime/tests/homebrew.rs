@@ -18,6 +18,7 @@ impl Fixture {
                 config: Some(config),
                 tools,
                 selected_files: Vec::new(),
+                selected_roots: Vec::new(),
                 system_data: Vec::new(),
             },
             path: OsString::new(),

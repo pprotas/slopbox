@@ -53,6 +53,17 @@ fn connect(
     StreamOwned<ClientConnection, UnixStream>,
     JoinHandle<Result<()>>,
 ) {
+    connect_via(routes, pem, false)
+}
+
+fn connect_via(
+    routes: Vec<AuthenticatedHttpRoute>,
+    pem: &str,
+    general: bool,
+) -> (
+    StreamOwned<ClientConnection, UnixStream>,
+    JoinHandle<Result<()>>,
+) {
     let (mut client, server) = UnixStream::pair().unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -60,7 +71,22 @@ fn connect(
     server
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let handler = thread::spawn(move || handle_account_stream(server, &routes, false));
+    let handler = thread::spawn(move || {
+        if general {
+            let root = tempfile::tempdir()?;
+            let recorder =
+                crate::gateway::EventRecorder::new("session", &root.path().join("events.jsonl"));
+            crate::gateway::handle_general_connection(
+                server,
+                root.path(),
+                "session",
+                &recorder,
+                &routes,
+            )
+        } else {
+            handle_account_stream(server, &routes, false)
+        }
+    });
     client
         .write_all(
             b"CONNECT forge.example.test:443 HTTP/1.1\r\nHost: forge.example.test:443\r\n\r\n",
@@ -164,6 +190,43 @@ fn mediated_upstream_authentication_is_verified_and_reflections_are_redacted() {
     assert!(response.ends_with("before [REDACTED] after"));
     assert!(!response.contains("disposable-upstream-secret"));
     assert!(!response.to_ascii_lowercase().contains("x-reflected:"));
+}
+
+#[test]
+fn ordinary_proxy_mediates_attached_accounts_and_never_falls_back_on_denial() {
+    let (route, upstream) =
+        upstream("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".into());
+    let mut routes = vec![route];
+    let pem = prepare(&mut routes).unwrap().unwrap();
+    let (mut client, handler) = connect_via(routes, &pem, true);
+    client
+        .write_all(
+            b"GET /api HTTP/1.1\r\nHost: forge.example.test\r\nAuthorization: Bearer guest\r\n\r\n",
+        )
+        .unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"));
+    handler.join().unwrap().unwrap();
+    assert!(
+        upstream
+            .join()
+            .unwrap()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("authorization: bearer disposable-upstream-secret\r\n")
+    );
+
+    let mut routes = vec![self::route()];
+    let pem = prepare(&mut routes).unwrap().unwrap();
+    let (mut client, handler) = connect_via(routes, &pem, true);
+    client
+        .write_all(b"POST /api HTTP/1.1\r\nHost: forge.example.test\r\nContent-Length: 0\r\n\r\n")
+        .unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 405"), "{response}");
+    handler.join().unwrap().unwrap();
 }
 
 #[test]

@@ -507,10 +507,15 @@ fn gateway_loop(config: GatewayLoopConfig, stop: Arc<AtomicBool>) {
                 let box_root = config.box_root.clone();
                 let session_id = config.session_id.clone();
                 let recorder = Arc::clone(&recorder);
+                let routes = Arc::clone(&config.authenticated_http_routes);
                 thread::spawn(move || {
-                    if let Err(error) =
-                        handle_general_connection(stream, &box_root, &session_id, &recorder)
-                    {
+                    if let Err(error) = handle_general_connection(
+                        stream,
+                        &box_root,
+                        &session_id,
+                        &recorder,
+                        &routes,
+                    ) {
                         eprintln!("slopbox general gateway: {error:#}");
                     }
                 });
@@ -570,6 +575,7 @@ fn handle_general_connection(
     box_root: &Path,
     session_id: &str,
     recorder: &EventRecorder,
+    routes: &[AuthenticatedHttpRoute],
 ) -> Result<()> {
     client.set_read_timeout(Some(Duration::from_secs(30)))?;
     let request = read_request_header(&mut client)?;
@@ -582,6 +588,15 @@ fn handle_general_connection(
         return send_simple_response(&mut client, 404, "Not Found", "not found\n");
     }
     if method.eq_ignore_ascii_case("CONNECT") {
+        let origin = account_origin(&target)?;
+        if routes
+            .iter()
+            .any(|route| route.proxy && route.origin.origin() == origin.origin())
+        {
+            client.set_read_timeout(Some(Duration::from_secs(60)))?;
+            client.set_write_timeout(Some(Duration::from_secs(60)))?;
+            return tls::handle(client, request, &target, routes);
+        }
         let (host, port) = parse_authority(&target, 443)?;
         return handle_connect(
             client,
@@ -1423,7 +1438,7 @@ mod tests {
 
         let general_response = exchange(
             b"POST /openrouter/api/v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n",
-            |stream| handle_general_connection(stream, directory.path(), "session", &recorder),
+            |stream| handle_general_connection(stream, directory.path(), "session", &recorder, &[]),
         );
         assert!(general_response.starts_with("HTTP/1.1 404 Not Found\r\n"));
 
