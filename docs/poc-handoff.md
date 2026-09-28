@@ -30,6 +30,12 @@ The local Homebrew preview is installed through `pprotas/tap`, whose custom remo
 
 Validation: 149 macOS unit tests, 11 CLI tests, strict Clippy, formatting, 10 TLS tests, Darwin Nix packaging, six packaged native regressions, Homebrew install/audit/test, and installed Bash/Node/Git/Claude command checks passed. The installed Claude 2.1.274 also returned a bounded live Haiku response in a disposable workspace using the new configuration and host Keychain source. Linux was not rerun for this preview; this is not a public release or broader runtime compatibility claim.
 
+### Native startup follow-up
+
+The local `0.2.0-alpha.2` preview increases the launchd worker-connect deadline from two to ten seconds and includes the worker phase and service label in timeout errors. A real launchd worker delayed by three seconds reproduces failure with the old deadline and passes with the new one; a failed-worker test checks bounded timeout reporting and cleanup. Coalition authentication and guest permissions are unchanged.
+
+Both new tests, the existing packaged native regressions, host tests/Clippy, Darwin packaging and Homebrew audit/test pass. Installed Claude onboarding rendered under a real PTY from `nix develop` in a disposable workspace, without submitting a prompt. Startup in the actual repository also passed after its configured signing key became available again. This does not add Pi resources to the selected runtime or establish the cause of every launchd startup failure.
+
 ## Subsequent work
 
 Bare Pi launch still initializes each project. Nix-free explicit commands need no project setup, but do not provide integrated Pi launch. Automatic resource selection beyond explicit bundles, automatic non-Pi tool separation, macOS application bundles/non-system dylibs, additional fixed model brokers and production TLS rollout remain outside these slices. The one-day session CA has no renewal, mediated uploads require Content-Length, and pinned or proxy-ignoring clients are not supported by this experiment. Do not weaken enforcement to accommodate them.

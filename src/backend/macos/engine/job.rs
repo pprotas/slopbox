@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use super::coalition::{AuditToken, Coalition, Identity};
 
+const WORKER_START_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub struct Job {
     directory: PathBuf,
     service: String,
@@ -108,7 +110,7 @@ impl Job {
         // A failed bootstrap can still have registered the job.
         job.loaded = true;
         launchctl(&["bootstrap", &domain, plist.to_str().unwrap()], false)?;
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + WORKER_START_TIMEOUT;
         let stream = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
@@ -116,7 +118,11 @@ impl Job {
                     if Instant::now() >= deadline {
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,
-                            "job did not connect",
+                            format!(
+                                "native worker {worker} did not connect within {}s (launchd service {})",
+                                WORKER_START_TIMEOUT.as_secs(),
+                                job.service,
+                            ),
                         ));
                     }
                     std::thread::sleep(Duration::from_millis(5));
@@ -368,4 +374,66 @@ fn xml(value: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    #[ignore = "requires a GUI launchd domain and SLOPBOX_TEST_SLOPBOX production binary"]
+    fn delayed_native_worker_connects_and_cleans_up() {
+        let binary = fs::canonicalize(std::env::var_os("SLOPBOX_TEST_SLOPBOX").unwrap()).unwrap();
+        let root = tempfile::tempdir_in("/private/var/tmp").unwrap();
+        let wrapper = root.path().join("delayed-worker");
+        fs::write(
+            &wrapper,
+            "#!/bin/sh\n/bin/sleep 3\nprogram=$1\nshift\nexec \"$program\" __macos-relay-worker \"$@\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o500)).unwrap();
+        let start = Instant::now();
+        let (mut job, mut stream) = Job::start(
+            &wrapper,
+            root.path(),
+            binary.to_str().unwrap(),
+            &[String::new(), String::new(), String::new()],
+            &[],
+        )
+        .unwrap();
+        assert!(start.elapsed() >= Duration::from_secs(3));
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut ports = [1u8; 6];
+        stream.read_exact(&mut ports).unwrap();
+        assert_eq!(ports, [0; 6]);
+        stream.write_all(b"S").unwrap();
+        let directory = job.directory().to_owned();
+        drop(stream);
+        job.finish().unwrap();
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    #[ignore = "requires a GUI launchd domain; exercises the bounded startup timeout"]
+    fn failed_native_worker_reports_phase_and_cleans_up() {
+        let root = tempfile::tempdir_in("/private/var/tmp").unwrap();
+        let wrapper = root.path().join("failed-worker");
+        fs::write(&wrapper, "#!/bin/sh\nexit 7\n").unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o500)).unwrap();
+        let start = Instant::now();
+        let error = match Job::start(&wrapper, root.path(), "__macos-relay-worker", &[], &[]) {
+            Ok(_) => panic!("failed worker connected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(start.elapsed() >= WORKER_START_TIMEOUT);
+        assert!(error.to_string().contains("__macos-relay-worker"));
+        assert!(error.to_string().contains("within 10s"));
+        assert!(error.to_string().contains("launchd service gui/"));
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
 }
