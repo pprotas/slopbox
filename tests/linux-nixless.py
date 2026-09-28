@@ -148,7 +148,8 @@ executables = """
     status = run(binary, "status", "--workspace", workspace, "--verbose")
     assert "runtime-source: host runtime.executables" in status
     assert "no automatic harness/tool separation" in status
-    assert "integrated Pi launch" in run(binary, success=False)
+    error = run(binary, success=False)
+    assert "no default_command configured" in error, error
     assert "Pi project setup" in run(
         binary,
         "init",
@@ -197,6 +198,22 @@ printf 'isolation-passed\\n'
     )
     assert output.count("closure=43") == 2 and output.count("isolation-passed") == 2
     assert not canary.exists()
+
+    config.write_text(
+        'default_command = ["bash"]\n'
+        + base
+        + '\n[environment]\nCLIENT_STATE = "${HOME}/state"\nCLIENT_LITERAL = "$(false)"\n'
+    )
+    (workspace / "flake.nix").write_text("this must not be evaluated")
+    assert "default-environment-passed" in run(
+        binary,
+        "--",
+        "-eu",
+        "-c",
+        'test "$CLIENT_STATE" = "$HOME/state"; test "$CLIENT_LITERAL" = \'$(false)\'; printf default-environment-passed',
+    )
+    (workspace / "flake.nix").unlink()
+    config.write_text(base)
 
     marker = root / "credential-command-ran"
     config.write_text(

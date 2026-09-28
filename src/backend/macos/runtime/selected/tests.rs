@@ -166,6 +166,8 @@ fn selected_native_runtime_rejects_setid_executables() {
     let (_directory, host) = fixture();
     let executable = host.home.join("echo");
     fs::copy("/bin/echo", &executable).unwrap();
+    // Darwin clears setgid when the copied file belongs to a group we do not hold.
+    std::os::unix::fs::chown(&executable, None, Some(unsafe { libc::getegid() })).unwrap();
     let selection = RuntimeSelection {
         executables: vec![executable.clone()],
         ..Default::default()
