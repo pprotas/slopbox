@@ -1,7 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-#[cfg(target_os = "macos")]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -9,21 +8,19 @@ use anyhow::{Context, Result, bail};
 
 pub(crate) fn system_diff() -> Result<PathBuf> {
     #[cfg(target_os = "linux")]
-    let path = "/run/current-system/sw/bin/diff";
+    {
+        trusted_executable("diff")
+    }
     #[cfg(target_os = "macos")]
-    let path = "/usr/bin/diff";
-    let diff = fs::canonicalize(path).context("required executable diff is not available")?;
-    #[cfg(target_os = "linux")]
-    anyhow::ensure!(
-        diff.starts_with("/nix/store"),
-        "system diff resolves outside /nix/store"
-    );
-    #[cfg(target_os = "macos")]
-    anyhow::ensure!(
-        diff == std::path::Path::new(path),
-        "system diff must be the native /usr/bin/diff"
-    );
-    Ok(diff)
+    {
+        let path = "/usr/bin/diff";
+        let diff = fs::canonicalize(path).context("required executable diff is not available")?;
+        anyhow::ensure!(
+            diff == Path::new(path),
+            "system diff must be the native /usr/bin/diff"
+        );
+        Ok(diff)
+    }
 }
 
 pub(crate) fn trusted_executable(
@@ -33,17 +30,7 @@ pub(crate) fn trusted_executable(
     let path = env::var_os("PATH").context("PATH is not set")?;
     #[cfg(target_os = "linux")]
     {
-        for directory in env::split_paths(&path) {
-            let candidate = directory.join(name);
-            if !candidate.is_file() {
-                continue;
-            }
-            let canonical = fs::canonicalize(&candidate)?;
-            if canonical.starts_with("/nix/store") {
-                return Ok(canonical);
-            }
-        }
-        bail!("required host executable {name} is not available in a trusted PATH entry")
+        host_executable(name, &path)
     }
     #[cfg(target_os = "macos")]
     native_executable(
@@ -55,6 +42,75 @@ pub(crate) fn trusted_executable(
             Path::new("/usr/local/Cellar"),
         ],
     )
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn nix_executable(name: &str, path: &OsStr) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for directory in env::split_paths(path).filter(|path| path.is_absolute()) {
+        let Ok(directory) = directory.canonicalize() else {
+            continue;
+        };
+        if !directory.starts_with("/nix/store") {
+            continue;
+        }
+        let Ok(canonical) = directory.join(name).canonicalize() else {
+            continue;
+        };
+        let metadata = fs::metadata(&canonical)?;
+        if canonical.starts_with("/nix/store")
+            && metadata.is_file()
+            && metadata.permissions().mode() & 0o111 != 0
+        {
+            return Ok(canonical);
+        }
+    }
+    bail!("required host executable {name} is not available in a trusted Nix PATH entry")
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn host_executable(name: &str, path: &OsStr) -> Result<PathBuf> {
+    if let Ok(executable) = nix_executable(name, path) {
+        return Ok(executable);
+    }
+    for directory in env::split_paths(path).filter(|path| path.is_absolute()) {
+        if let Ok(executable) = protected_system_executable(&directory.join(name)) {
+            return Ok(executable);
+        }
+    }
+    bail!(
+        "required host executable {name} needs a Nix package or a protected root-owned installation"
+    )
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn protected_system_path(path: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+
+    anyhow::ensure!(path.is_absolute(), "host helper path must be absolute");
+    let canonical = path.canonicalize()?;
+    for ancestor in path.ancestors().chain(canonical.ancestors()) {
+        let metadata = fs::metadata(ancestor)?;
+        anyhow::ensure!(
+            metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
+            "host helper has unprotected ancestry: {}",
+            ancestor.display()
+        );
+    }
+    Ok(canonical)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn protected_system_executable(path: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let canonical = protected_system_path(path)?;
+    let metadata = fs::metadata(&canonical)?;
+    anyhow::ensure!(
+        metadata.is_file() && metadata.mode() & 0o111 != 0,
+        "host helper is not an executable regular file"
+    );
+    Ok(canonical)
 }
 
 #[cfg(target_os = "macos")]
@@ -113,6 +169,37 @@ pub(crate) fn find_optional_executable(name: &str, path: &OsStr) -> Option<PathB
     env::split_paths(path)
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn system_helpers_reject_mutable_ancestry_and_non_executable_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("helper");
+        fs::write(&executable, "#!/bin/sh\nexit 99\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(protected_system_executable(&executable).is_err());
+        symlink("/usr/bin/env", root.path().join("alias")).unwrap();
+        assert!(protected_system_executable(&root.path().join("alias")).is_err());
+        assert!(protected_system_executable(Path::new("/")).is_err());
+        assert!(protected_system_path(Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn host_helpers_reject_executables_and_symlinks_outside_the_store() {
+        let root = tempfile::tempdir().unwrap();
+        let helper = root.path().join("nix");
+        fs::write(&helper, "#!/bin/sh\nexit 99\n").unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(nix_executable("nix", root.path().as_os_str()).is_err());
+        symlink(&helper, root.path().join("diff")).unwrap();
+        assert!(nix_executable("diff", root.path().as_os_str()).is_err());
+        assert!(nix_executable("nix", OsStr::new("")).is_err());
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

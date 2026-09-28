@@ -1,6 +1,6 @@
 [package]
 name = "slopbox"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A development sandbox for coding agents"
 
@@ -12,9 +12,19 @@ clap = { version = "4.5", features = ["derive"] }
 glob = "0.3"
 httparse = "1.10"
 libc = "0.2"
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem", "zeroize"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "form", "json", "rustls"] }
+rustls = { version = "0.23.45", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.23"
+time = { version = "0.3", default-features = false, features = ["std"] }
 toml = "0.9"
 url = "2.5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+goblin = { version = "0.10.7", default-features = false, features = ["std", "elf32", "elf64", "endian_fd"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+goblin = { version = "0.10.7", default-features = false, features = ["std", "mach32", "mach64", "endian_fd"] }

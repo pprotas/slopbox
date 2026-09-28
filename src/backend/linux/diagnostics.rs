@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 
 use super::{find_executable, sandbox_path, validate_workspace_contents};
+use crate::backend::RuntimeSelection;
 use crate::policy::{Backend, Policy, RuntimeMode};
 
 pub(crate) fn check(
@@ -13,6 +14,7 @@ pub(crate) fn check(
     policy: Policy,
     checks: &mut Vec<(&'static str, Result<String>)>,
     notes: &mut Vec<String>,
+    selection: Option<&RuntimeSelection>,
 ) {
     checks.push((
         "Workspace",
@@ -21,18 +23,23 @@ pub(crate) fn check(
     ));
     match sandbox_path() {
         Ok(host_path) => {
-            checks.push((
-                "Pi executable",
-                executable("pi", &host_path)
-                    .map(|path| format!("{} (not started)", path.display())),
-            ));
+            if selection.is_none() {
+                checks.push((
+                    "Pi executable",
+                    executable("pi", &host_path)
+                        .map(|path| format!("{} (not started)", path.display())),
+                ));
+            }
             if policy.backend == Backend::Native {
                 checks.push((
                     "Namespaces",
                     (|| {
                         let bwrap = executable("bwrap", &host_path)?;
                         let bash = executable("bash", &host_path)?;
-                        super::probe::namespace_probe(&bwrap, &bash)
+                        let runtime = selection
+                            .map(|selection| super::elf::prepare(selection, workspace, false))
+                            .transpose()?;
+                        super::probe::namespace_probe(&bwrap, &bash, runtime.as_ref())
                     })(),
                 ));
             } else {
@@ -42,7 +49,7 @@ pub(crate) fn check(
         Err(error) => checks.push((
             "Host PATH",
             Err(error.context(
-                "install the required host Nix tools and expose their bin directories in PATH",
+                "install the required host tools and expose their bin directories in PATH",
             )),
         )),
     }
@@ -58,8 +65,12 @@ pub(crate) fn check(
                 policy.runtime != RuntimeMode::Project || flake,
                 "runtime=project requires flake.nix; provide a trusted project development flake"
             );
+            ensure!(
+                selection.is_none() || !flake,
+                "selected executable runtimes do not activate project flakes"
+            );
             if flake {
-                let nix = super::runtime::system_nix()?;
+                let nix = super::runtime::host_nix()?;
                 Ok(format!(
                     "project flake present; Nix at {} (not evaluated)",
                     nix.display()
@@ -73,13 +84,9 @@ pub(crate) fn check(
 
 fn executable(name: &str, path: &OsStr) -> Result<PathBuf> {
     let executable = find_executable(name, path).with_context(|| {
-        format!("install {name} on the host and include its Nix bin directory in PATH")
+        format!("install {name} on the host in a protected system or Nix bin directory")
     })?;
     let executable = fs::canonicalize(executable)?;
-    ensure!(
-        executable.starts_with("/nix/store"),
-        "{name} resolves outside /nix/store; use a host Nix package"
-    );
     ensure!(
         fs::metadata(&executable)?.permissions().mode() & 0o111 != 0,
         "{name} is not executable; repair the host package installation"
@@ -89,9 +96,7 @@ fn executable(name: &str, path: &OsStr) -> Result<PathBuf> {
 
 pub(crate) fn runtime_description(mode: RuntimeMode) -> &'static str {
     match mode {
-        RuntimeMode::Host => {
-            "Entire Nix store and system tools readable, including any stored source"
-        }
+        RuntimeMode::Host => "Entire Nix store readable, including any stored source",
         RuntimeMode::Project => "Selected Nix closure readable; resolved at launch",
         RuntimeMode::Image => "Isolated image requested; not implemented",
     }

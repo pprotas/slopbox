@@ -177,7 +177,6 @@ fn parse_helper_arguments(arguments: &[OsString]) -> Result<PathBuf> {
     let mut operation = None;
     let mut namespace = None;
     let mut public_key = None;
-    let mut use_agent = false;
     let mut payload = None;
     while index < arguments.len() {
         match arguments[index].as_os_str() {
@@ -193,7 +192,8 @@ fn parse_helper_arguments(arguments: &[OsString]) -> Result<PathBuf> {
                 index += 1;
                 public_key = arguments.get(index).cloned();
             }
-            value if value == OsStr::new("-U") => use_agent = true,
+            // Older Git omits -U; the host broker always enforces agent-backed signing.
+            value if value == OsStr::new("-U") => {}
             value if value.to_string_lossy().starts_with('-') => {
                 bail!("unsupported Git signing helper argument")
             }
@@ -207,8 +207,7 @@ fn parse_helper_arguments(arguments: &[OsString]) -> Result<PathBuf> {
     ensure!(
         operation.as_deref() == Some(OsStr::new("sign"))
             && namespace.as_deref() == Some(OsStr::new("git"))
-            && public_key.is_some()
-            && use_agent,
+            && public_key.is_some(),
         "unsupported Git signing operation"
     );
     payload.context("Git signing payload is missing")
@@ -557,5 +556,18 @@ mod tests {
             parse_helper_arguments(&arguments).unwrap(),
             PathBuf::from("/tmp/data")
         );
+        let legacy = arguments
+            .into_iter()
+            .filter(|argument| argument != "-U")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            parse_helper_arguments(&legacy).unwrap(),
+            PathBuf::from("/tmp/data")
+        );
+        for (index, value) in [(1, "verify"), (3, "file"), (4, "-x")] {
+            let mut invalid = legacy.clone();
+            invalid[index] = value.into();
+            assert!(parse_helper_arguments(&invalid).is_err());
+        }
     }
 }

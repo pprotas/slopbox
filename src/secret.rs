@@ -20,6 +20,27 @@ pub fn from_environment(variable: &str) -> Result<String> {
     validate_secret(secret)
 }
 
+pub fn from_keychain(service: &str, account: &str) -> Result<String> {
+    ensure!(
+        [service, account].iter().all(|value| !value.is_empty()
+            && value.len() <= 1024
+            && !value.chars().any(char::is_control)),
+        "Keychain service and account must be nonempty names without control characters"
+    );
+    #[cfg(target_os = "macos")]
+    {
+        let secret = security_framework::passwords::get_generic_password(service, account)
+            .context("failed to read the configured Keychain item on the host")?;
+        ensure!(
+            secret.len() <= 64 * 1024,
+            "Keychain secret is unexpectedly large"
+        );
+        validate_secret(String::from_utf8(secret).context("Keychain secret is not UTF-8")?)
+    }
+    #[cfg(not(target_os = "macos"))]
+    anyhow::bail!("Keychain secret sources require macOS")
+}
+
 pub fn from_command(
     arguments: &[String],
     #[cfg(target_os = "macos")] workspace: &Path,
@@ -31,7 +52,7 @@ pub fn from_command(
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
             && arguments.iter().all(|argument| !argument.contains('\0')),
-        "secret command requires a packaged executable name and valid arguments"
+        "secret command requires a trusted helper name and valid arguments"
     );
     let executable = trusted_executable(
         program,
@@ -153,6 +174,23 @@ fn validate_secret(secret: String) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keychain_names_are_validated_without_accessing_the_store() {
+        for (service, account) in [
+            ("", "account"),
+            ("service", ""),
+            ("service\0", "account"),
+            ("service", "account\n"),
+        ] {
+            assert!(
+                from_keychain(service, account)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Keychain service and account")
+            );
+        }
+    }
 
     #[test]
     fn validates_environment_variable_names() {

@@ -2,7 +2,7 @@
 
 Slopbox runs coding agents with explicit access to project files, tools, networks, and external accounts. It keeps host credentials outside the agent and records network access that needs human approval.
 
-The current alpha supports NixOS with Pi, using native `developer` and `contained` profiles. An [experimental native macOS launcher](docs/macos.md) supports explicitly selected Pi/Node and sandboxed bash, not the full Linux feature set. Standard Linux and additional harnesses remain targets. Each backend must independently satisfy its declared security contract.
+The current alpha supports Nix-backed Linux with Pi, using native `developer` and `contained` profiles, tested on NixOS and [Ubuntu with Nix](docs/poc-linux-runtime.md). An opt-in [Nix-free Linux runtime](docs/poc-nixless-linux.md) runs selected ELF executables and scripts, with explicit [application bundles](docs/poc-runtime-bundles.md) for plugins and package data. Unmodified Aider and [headless Claude Code](docs/poc-claude-code.md) have local fixture coverage; automatic harness/tool separation is not provided. The [experimental native macOS launcher](docs/macos.md) supports Pi/Node with separate shell enforcement and [generic selected commands](docs/poc-native-runtime.md) with application bundles and Mach-O dependency discovery. Unmodified Pi and Claude have local generic-runtime acceptance. It does not provide the full Linux feature set. Each backend must independently satisfy its declared security contract.
 
 ## What it does
 
@@ -12,7 +12,7 @@ A Slopbox session can provide:
 - live, read-only, or staged access to one project;
 - a private home and package caches;
 - concurrent sessions with per-run generated configuration and shared project history;
-- a host or project-selected Nix runtime;
+- a Nix runtime or explicitly selected Linux executable dependencies;
 - deny-by-default HTTP and HTTPS networking;
 - host-approved session and project destinations;
 - fixed authenticated routes whose real credentials never enter the sandbox;
@@ -22,7 +22,24 @@ A Slopbox session can provide:
 
 The Linux backend uses bubblewrap and shares the host kernel. It is intended for mistakes, prompt injection, and ordinary malicious userspace—not kernel exploits. See [SECURITY-MODEL.md](SECURITY-MODEL.md) for precise guarantees and limitations.
 
-## Try it
+## Generic commands
+
+Configure selected tools in the host's `~/.config/slopbox/config.toml`:
+
+```toml
+default_command = ["bash"]
+
+[policy]
+harness = "none"
+credentials = "none"
+
+[runtime]
+executables = ["bash", "cat", "ls"]
+```
+
+Then use `slopbox` for the configured command or `slopbox run -- COMMAND` for another selected tool. No Pi setup is required, and selected runtimes do not implicitly activate project flakes. Host-configured guest environment values can refer to public broker endpoints and private session paths. macOS account secrets can come directly from Keychain; they remain host-side. See [configuration](docs/configuration.md#command-launch) and [native runtime limits](docs/poc-native-runtime.md).
+
+## Legacy Pi development setup
 
 ```bash
 nix develop
@@ -30,7 +47,7 @@ cargo test
 nix develop -c cargo run
 ```
 
-The default command starts Pi in the current project. First run asks how changes should work and confirms access. Use `slopbox init` to reconfigure, or `slopbox -- --continue` to resume Pi.
+Without a configured default command or selected runtime, the legacy launch starts Pi in the current project. First run asks how changes should work and confirms access. Use `slopbox init` to reconfigure, or `slopbox -- --continue` to resume Pi.
 
 Inspect the effective policy without starting an agent:
 
@@ -68,9 +85,11 @@ nix run . -- stage apply <stage-id>
 nix run . -- stage discard <stage-id>
 ```
 
-Add `git_urls` to a workspace-bound authenticated route to use ordinary Git commands through the broker without changing `.git/config`; see [configuration](docs/configuration.md#git-smart-http).
+[Shared host defaults and directory rules](docs/configuration.md#shared-host-defaults-and-directory-rules) select reusable identities and accounts without repository configuration. Opt-in account TLS mediation supports ordinary HTTPS clients using an explicit proxy and session CA; see [POC scope](docs/poc-generic-capabilities.md).
 
-The basic `cd project && slopbox` workflow and revocable network rules are implemented for Pi. The host approval view remains opt-in; native approval and actual-Pi terminal fixtures have passed on Apple Silicon/macOS 27. Standard Linux runtimes, broader macOS tooling and additional harness/provider integrations remain planned.
+Add `git_urls` to an authenticated route to use ordinary Git commands through the broker without changing `.git/config`; see [configuration](docs/configuration.md#git-smart-http).
+
+The basic `cd project && slopbox` workflow and revocable network rules are implemented for Pi. The host approval view remains opt-in; native approval and actual-Pi terminal fixtures have passed on Apple Silicon/macOS 27. Broader runtime/resource discovery, macOS tooling and additional harness/provider integrations remain planned.
 
 ## Documentation
 
@@ -98,7 +117,7 @@ nix flake check
 nix run .#e2e
 ```
 
-`nix run .#e2e` runs directly on NixOS and requires user namespaces and Pi. It validates the direct and contained runtime paths without making a model request. The `checks.<linux-system>.e2e` flake check runs the same suite in a NixOS VM; CI requires KVM.
+`nix run .#e2e` runs directly on Nix-backed Linux and requires working outer/nested user namespaces. The app supplies its test tools, including Pi. It validates direct and contained runtime paths, with either single-user Nix or a daemon, without making a model request. CI has separate Ubuntu-host and NixOS-VM jobs; the latter requires KVM. The Nix-free job instead builds with distro tools and runs `tests/linux-nixless.py`, `tests/linux-bundles.py` and the pinned Aider fixture `tests/linux-harness.py` on a host without `/nix`. See [bundle test preparation](docs/poc-runtime-bundles.md#validation).
 
 With direnv/nix-direnv configured on the host, review `.envrc` and run `direnv allow` to activate the development shell automatically.
 

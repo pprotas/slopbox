@@ -57,17 +57,24 @@ pub(crate) struct PreparedDevEnvironment {
     pub store_paths: Vec<PathBuf>,
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) enum RuntimeStore {
-    Host,
-    Selected(Vec<PathBuf>),
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeSelection {
+    #[serde(default)]
+    pub executables: Vec<PathBuf>,
+    #[serde(default)]
+    pub dependency_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub bundles: Vec<PathBuf>,
 }
 
 pub(crate) struct RuntimePlan {
     #[cfg(target_os = "macos")]
     pub native: macos::runtime::NativeRuntime,
     #[cfg(target_os = "linux")]
-    pub store: RuntimeStore,
+    pub read_only_paths: Vec<PathBuf>,
+    #[cfg(target_os = "linux")]
+    pub system_links: Vec<(PathBuf, PathBuf)>,
     pub path: OsString,
 }
 

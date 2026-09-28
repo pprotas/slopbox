@@ -47,16 +47,33 @@ pub(super) fn render(
         "kern.hostname" "kern.version" "hw.machine"))
 "#
     .to_owned();
-    let node = &plan.runtime.native.config.node;
-    let package = plan
-        .runtime
-        .native
-        .config
-        .pi_cli
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
+    let config = plan.runtime.native.config.as_ref();
+    let generic = config.is_none();
+    if generic && !tool && !plan.private_terminal {
+        // Redirected standard files are explicit descriptor grants, not path read/write grants.
+        for descriptor in [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+            let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if unsafe { libc::fstat(descriptor, metadata.as_mut_ptr()) } != 0 {
+                continue;
+            }
+            if unsafe { metadata.assume_init() }.st_mode & libc::S_IFMT != libc::S_IFREG {
+                continue;
+            }
+            let mut path = [0u8; libc::PATH_MAX as usize];
+            if unsafe { libc::fcntl(descriptor, libc::F_GETPATH, path.as_mut_ptr()) } == 0 {
+                use std::os::unix::ffi::OsStrExt;
+                let length = path
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .unwrap_or(path.len());
+                let path = Path::new(std::ffi::OsStr::from_bytes(&path[..length]));
+                profile.push_str(&format!(
+                    "(allow file-read-metadata (literal {}))\n",
+                    quoted(path)?
+                ));
+            }
+        }
+    }
     let home = if tool {
         plan.tool_home
     } else {
@@ -75,11 +92,56 @@ pub(super) fn render(
         },
         quoted(plan.workspace.source)?
     ));
-    profile.push_str(&format!("(allow file-read* (literal {}))\n", quoted(node)?));
-    for path in [node.as_path(), package, home, plan.workspace.source]
+    let temporary = plan.session_dir.join("tmp");
+    let mut runtime_paths = vec![home, plan.workspace.source];
+    if let Some(config) = config {
+        profile.push_str(&format!(
+            "(allow file-read* (literal {}))\n",
+            quoted(&config.node)?
+        ));
+        runtime_paths.extend([
+            config.node.as_path(),
+            config.pi_cli.parent().unwrap().parent().unwrap(),
+        ]);
+    } else {
+        ensure!(!tool, "generic native commands have no separate tool role");
+        profile.push_str(&format!(
+            r#"(allow signal (target same-sandbox))
+(allow file-read* (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/zero"))
+(deny file-write-unlink (literal {home}))
+(allow file-read* file-write* (subpath {temporary}))
+(allow process-exec (subpath {home}) (subpath {workspace}) (subpath {temporary}))
+(allow system-socket (socket-domain AF_UNIX))
+"#,
+            home = quoted(home)?,
+            workspace = quoted(plan.workspace.source)?,
+            temporary = quoted(&temporary)?,
+        ));
+        runtime_paths.push(&temporary);
+        for root in &plan.runtime.native.selected_roots {
+            profile.push_str(&format!(
+                "(allow file-read* process-exec (subpath {}))\n",
+                quoted(root)?
+            ));
+            runtime_paths.push(root);
+        }
+        for file in &plan.runtime.native.selected_files {
+            profile.push_str(&format!(
+                "(allow file-read* process-exec (literal {}))\n",
+                quoted(file)?
+            ));
+            runtime_paths.push(file);
+        }
+        for file in &plan.runtime.native.system_data {
+            profile.push_str(&format!("(allow file-read* (literal {}))\n", quoted(file)?));
+            runtime_paths.push(file);
+        }
+    }
+    let parents: std::collections::BTreeSet<_> = runtime_paths
         .into_iter()
         .flat_map(|path| path.ancestors().skip(1))
-    {
+        .collect();
+    for path in parents {
         profile.push_str(&format!(
             "(allow file-read-metadata (literal {}))\n",
             quoted(path)?
@@ -134,7 +196,9 @@ pub(super) fn render(
         profile.push_str(
             "(allow process-exec)\n(allow file-read* (subpath \"/bin\") (subpath \"/usr/bin\") (literal \"/private/etc/ssl/openssl.cnf\") (literal \"/private/etc/ssl/cert.pem\"))\n",
         );
-    } else {
+    } else if let Some(config) = config {
+        let node = &config.node;
+        let package = config.pi_cli.parent().unwrap().parent().unwrap();
         profile.push_str(&format!("(allow process-exec (literal \"/bin/bash\") (literal {}))\n(allow file-read* (subpath {}))\n", quoted(node)?, quoted(package)?));
         profile.push_str(&format!(
             "(allow file-read* (literal {}))\n",
@@ -162,9 +226,9 @@ pub(super) fn render(
             ));
         }
         profile.push_str(&format!("(allow system-socket (socket-domain AF_UNIX))\n(allow network-outbound (remote unix-socket (literal {})))\n", quoted(socket)?));
-        if plan.private_terminal {
-            profile.push_str("(allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))\n");
-        }
+    }
+    if !tool && plan.private_terminal {
+        profile.push_str("(allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))\n");
     }
     let gitconfig = plan.session_dir.join("gitconfig");
     if gitconfig.is_file() {
@@ -179,8 +243,25 @@ pub(super) fn render(
             ));
         }
     }
+    let account_ca = plan.session_dir.join("account-ca.pem");
+    if (tool || generic) && account_ca.is_file() {
+        ensure!(
+            plan.brokers.authenticated_http.is_some(),
+            "account TLS broker is unavailable"
+        );
+        profile.push_str(&format!(
+            "(allow file-read* (literal {}))\n",
+            quoted(&account_ca)?
+        ));
+        for parent in account_ca.ancestors().skip(1) {
+            profile.push_str(&format!(
+                "(allow file-read-metadata (literal {}))\n",
+                quoted(parent)?
+            ));
+        }
+    }
     let github = plan.session_dir.join("github");
-    if tool && github.is_dir() {
+    if (tool || generic) && github.is_dir() {
         let endpoint = plan
             .brokers
             .authenticated_http
@@ -266,11 +347,14 @@ mod tests {
         let runtime = RuntimePlan {
             path: Default::default(),
             native: NativeRuntime {
-                config: Config {
+                config: Some(Config {
                     node: "/runtime/node".into(),
                     pi_cli: "/runtime/pi/dist/cli.js".into(),
                     tool_timeout_seconds: 10,
-                },
+                }),
+                selected_files: Vec::new(),
+                selected_roots: Vec::new(),
+                system_data: Vec::new(),
                 tools,
             },
         };
@@ -335,6 +419,8 @@ mod tests {
         std::fs::create_dir(&session).unwrap();
         let gitconfig = session.join("gitconfig");
         std::fs::write(&gitconfig, "generated").unwrap();
+        let ca = session.join("account-ca.pem");
+        std::fs::write(&ca, "public trust").unwrap();
         let executable = root.path().join("control/worker");
         let helper = executable.with_file_name("git-sign");
         let signing = root.path().join("signing");
@@ -350,11 +436,14 @@ mod tests {
         let runtime = RuntimePlan {
             path: Default::default(),
             native: NativeRuntime {
-                config: Config {
+                config: Some(Config {
                     node: "/runtime/node".into(),
                     pi_cli: "/runtime/pi/dist/cli.js".into(),
                     tool_timeout_seconds: 10,
-                },
+                }),
+                selected_files: Vec::new(),
+                selected_roots: Vec::new(),
+                system_data: Vec::new(),
                 tools: DeveloperTools::default(),
             },
         };
@@ -393,6 +482,13 @@ mod tests {
                 )));
                 assert_eq!(
                     profile.contains(&format!("(subpath {})", quoted(&github).unwrap())),
+                    tool
+                );
+                assert_eq!(
+                    profile.contains(&format!(
+                        "(allow file-read* (literal {}))",
+                        quoted(&ca).unwrap()
+                    )),
                     tool
                 );
                 assert_eq!(

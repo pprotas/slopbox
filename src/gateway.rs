@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -21,6 +21,8 @@ use crate::http::{
     read_retry, resolve_public, send_simple_response,
 };
 use crate::provider::{Kind, Providers};
+mod tls;
+
 const GENERAL_PROXY_PORT: u16 = 39_080;
 const MODEL_PROXY_PORT: u16 = 39_081;
 const AUTHENTICATED_HTTP_PROXY_PORT: u16 = 39_082;
@@ -36,6 +38,7 @@ pub struct GatewaySession {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     providers: Vec<Kind>,
+    account_ca: Option<String>,
 }
 
 #[derive(Clone)]
@@ -49,13 +52,18 @@ pub enum HttpAuthentication {
 pub struct AuthenticatedHttpRoute {
     name: String,
     upstream_base: Url,
+    origin: Url,
     direct_base: Option<Url>,
+    proxy: bool,
+    tls: Option<Arc<rustls::ServerConfig>>,
     methods: HashSet<String>,
     authorization: Arc<str>,
     secret: Arc<str>,
     resolved: Option<SocketAddr>,
     connect_timeout: Duration,
     load_system_roots: bool,
+    #[cfg(test)]
+    test_root: Option<reqwest::Certificate>,
     allow_private_addresses: bool,
 }
 
@@ -91,18 +99,29 @@ impl AuthenticatedHttpRoute {
         let route = Self {
             name,
             direct_base: direct.then(|| upstream_base.clone()),
+            origin: upstream_base.clone(),
             upstream_base,
+            proxy: false,
+            tls: None,
             methods,
             authorization,
             secret,
             resolved: None,
             connect_timeout: Duration::from_secs(15),
             load_system_roots: true,
+            #[cfg(test)]
+            test_root: None,
             allow_private_addresses,
         };
         #[cfg(all(test, target_os = "macos"))]
         let route = {
             let mut route = route;
+            if route.upstream_base.host_str() == Some("127.0.0.1")
+                && allow_private_addresses
+                && let Some(path) = std::env::var_os("SLOPBOX_TEST_TLS_CA")
+            {
+                route.test_root = Some(reqwest::Certificate::from_pem(&std::fs::read(path)?)?);
+            }
             if matches!(
                 route.upstream_base.host_str(),
                 Some("forgejo.native.invalid" | "github.native.invalid")
@@ -121,6 +140,11 @@ impl AuthenticatedHttpRoute {
             route
         };
         Ok(route)
+    }
+
+    pub fn with_proxy(mut self, proxy: bool) -> Self {
+        self.proxy = proxy;
+        self
     }
 
     pub fn name(&self) -> &str {
@@ -259,8 +283,9 @@ pub enum ApprovalScope {
 impl GatewaySession {
     pub fn start(
         box_root: &Path,
-        authenticated_http_routes: Vec<AuthenticatedHttpRoute>,
+        mut authenticated_http_routes: Vec<AuthenticatedHttpRoute>,
     ) -> Result<Self> {
+        let account_ca = tls::prepare(&mut authenticated_http_routes)?;
         secure_dir(box_root)?;
         crate::network::list_rules(box_root)?;
         let session_id = session_id();
@@ -346,6 +371,7 @@ impl GatewaySession {
             stop,
             thread: Some(thread),
             providers: available_providers,
+            account_ca,
         })
     }
 
@@ -379,6 +405,10 @@ impl GatewaySession {
 
     pub fn providers(&self) -> &[Kind] {
         &self.providers
+    }
+
+    pub fn account_ca(&self) -> Option<&str> {
+        self.account_ca.as_deref()
     }
 }
 
@@ -477,10 +507,15 @@ fn gateway_loop(config: GatewayLoopConfig, stop: Arc<AtomicBool>) {
                 let box_root = config.box_root.clone();
                 let session_id = config.session_id.clone();
                 let recorder = Arc::clone(&recorder);
+                let routes = Arc::clone(&config.authenticated_http_routes);
                 thread::spawn(move || {
-                    if let Err(error) =
-                        handle_general_connection(stream, &box_root, &session_id, &recorder)
-                    {
+                    if let Err(error) = handle_general_connection(
+                        stream,
+                        &box_root,
+                        &session_id,
+                        &recorder,
+                        &routes,
+                    ) {
                         eprintln!("slopbox general gateway: {error:#}");
                     }
                 });
@@ -540,6 +575,7 @@ fn handle_general_connection(
     box_root: &Path,
     session_id: &str,
     recorder: &EventRecorder,
+    routes: &[AuthenticatedHttpRoute],
 ) -> Result<()> {
     client.set_read_timeout(Some(Duration::from_secs(30)))?;
     let request = read_request_header(&mut client)?;
@@ -552,6 +588,15 @@ fn handle_general_connection(
         return send_simple_response(&mut client, 404, "Not Found", "not found\n");
     }
     if method.eq_ignore_ascii_case("CONNECT") {
+        let origin = account_origin(&target)?;
+        if routes
+            .iter()
+            .any(|route| route.proxy && route.origin.origin() == origin.origin())
+        {
+            client.set_read_timeout(Some(Duration::from_secs(60)))?;
+            client.set_write_timeout(Some(Duration::from_secs(60)))?;
+            return tls::handle(client, request, &target, routes);
+        }
         let (host, port) = parse_authority(&target, 443)?;
         return handle_connect(
             client,
@@ -571,16 +616,40 @@ fn handle_general_connection(
 }
 
 fn handle_authenticated_http_connection(
-    mut client: UnixStream,
+    client: UnixStream,
+    routes: &[AuthenticatedHttpRoute],
+    direct: bool,
+) -> Result<()> {
+    client.set_read_timeout(Some(Duration::from_secs(60)))?;
+    client.set_write_timeout(Some(Duration::from_secs(60)))?;
+    handle_account_stream(client, routes, direct)
+}
+
+fn handle_account_stream(
+    mut client: impl Read + Write,
+    routes: &[AuthenticatedHttpRoute],
+    direct: bool,
+) -> Result<()> {
+    let request = read_request_header(&mut client)?;
+    let (method, target) = parse_request_line(&request.header)?;
+    if method.eq_ignore_ascii_case("CONNECT") {
+        ensure!(
+            !direct,
+            "CONNECT is not supported on the origin-form socket"
+        );
+        return tls::handle(client, request, &target, routes);
+    }
+    forward_authenticated_request(&mut client, request, routes, direct)
+}
+
+fn forward_authenticated_request(
+    mut client: &mut (impl Read + Write),
+    request: BufferedRequest,
     routes: &[AuthenticatedHttpRoute],
     direct: bool,
 ) -> Result<()> {
     const MAX_BODY_SIZE: usize = 512 * 1024 * 1024;
-
-    client.set_read_timeout(Some(Duration::from_secs(60)))?;
-    let request = read_request_header(&mut client)?;
     let (method, target) = parse_request_line(&request.header)?;
-
     let mut headers = [httparse::EMPTY_HEADER; 96];
     let mut parsed = httparse::Request::new(&mut headers);
     ensure!(
@@ -612,16 +681,22 @@ fn handle_authenticated_http_connection(
         );
     }
     ensure!(
-        !parsed.headers.iter().any(|header| {
-            header.name.eq_ignore_ascii_case("transfer-encoding")
-                && !header.value.eq_ignore_ascii_case(b"identity")
-        }),
-        "chunked authenticated HTTP requests are not supported"
+        !parsed
+            .headers
+            .iter()
+            .any(|header| header.name.eq_ignore_ascii_case("transfer-encoding")),
+        "Transfer-Encoding is not supported for authenticated HTTP requests"
     );
-    let content_length = parsed
+    let mut lengths = parsed
         .headers
         .iter()
-        .find(|header| header.name.eq_ignore_ascii_case("content-length"))
+        .filter(|header| header.name.eq_ignore_ascii_case("content-length"));
+    let length = lengths.next();
+    ensure!(
+        lengths.next().is_none(),
+        "duplicate authenticated HTTP Content-Length"
+    );
+    let content_length = length
         .map(|header| std::str::from_utf8(header.value))
         .transpose()?
         .map(str::parse::<usize>)
@@ -672,6 +747,10 @@ fn handle_authenticated_http_connection(
         .connect_timeout(route.connect_timeout);
     if !route.load_system_roots {
         http = http.tls_certs_only(std::iter::empty::<reqwest::Certificate>());
+    }
+    #[cfg(test)]
+    if let Some(root) = &route.test_root {
+        http = http.tls_certs_only([root.clone()]);
     }
     let http = http.resolve(host, address).build()?;
     let mut upstream_request = http
@@ -775,14 +854,9 @@ fn account_suffix<'a>(base: &str, target: &'a str) -> Option<&'a str> {
     .then(|| &target[base.len()..])
 }
 
-fn match_direct_http_route<'r, 't>(
-    routes: &'r [AuthenticatedHttpRoute],
-    target: &'t str,
-    host: &str,
-) -> Result<(&'r AuthenticatedHttpRoute, &'t str)> {
-    validate_account_target(target)?;
+fn account_origin(host: &str) -> Result<Url> {
     ensure!(
-        !host.chars().any(char::is_whitespace),
+        !host.chars().any(char::is_whitespace) && !host.contains(['/', '\\', '@', '?', '#', '%']),
         "invalid direct account Host"
     );
     let origin = Url::parse(&format!("https://{host}/")).context("invalid direct account Host")?;
@@ -794,6 +868,16 @@ fn match_direct_http_route<'r, 't>(
             && origin.fragment().is_none(),
         "invalid direct account Host"
     );
+    Ok(origin)
+}
+
+fn match_direct_http_route<'r, 't>(
+    routes: &'r [AuthenticatedHttpRoute],
+    target: &'t str,
+    host: &str,
+) -> Result<(&'r AuthenticatedHttpRoute, &'t str)> {
+    validate_account_target(target)?;
+    let origin = account_origin(host)?;
     let mut matched = None;
     for route in routes {
         let Some(base) = &route.direct_base else {
@@ -1354,7 +1438,7 @@ mod tests {
 
         let general_response = exchange(
             b"POST /openrouter/api/v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n",
-            |stream| handle_general_connection(stream, directory.path(), "session", &recorder),
+            |stream| handle_general_connection(stream, directory.path(), "session", &recorder, &[]),
         );
         assert!(general_response.starts_with("HTTP/1.1 404 Not Found\r\n"));
 
@@ -1491,13 +1575,17 @@ mod tests {
         let route = AuthenticatedHttpRoute {
             name: "git".to_owned(),
             upstream_base: Url::parse("http://route.test/repository").unwrap(),
+            origin: Url::parse("https://route.test/repository").unwrap(),
             direct_base: None,
+            proxy: false,
+            tls: None,
             methods: ["POST".to_owned()].into(),
             authorization: Arc::from("Basic cGk6aG9zdC1yb3V0ZS10b2tlbg=="),
             secret: Arc::from(token),
             resolved: Some(address),
             connect_timeout: Duration::from_secs(1),
             load_system_roots: false,
+            test_root: None,
             allow_private_addresses: true,
         };
         let body = b"git-payload";

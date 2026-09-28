@@ -1,6 +1,15 @@
 # Roadmap
 
-The [project direction](direction.md) is authoritative. Prioritize generic execution/runtime contracts, shared credential transport, and reusable global configuration before adding more product-specific integrations. Preserve existing security and reliability work. The numbered platform/provider sections below are earlier backlog context, not the execution order.
+The [project direction](direction.md) is authoritative. Harness-specific integrations belong outside this repository, not in optional built-in adapters. Preserve existing security and reliability work. The numbered platform/provider sections below are earlier backlog context, not the execution order or permission to add harness integrations here.
+
+## Immediate architecture work
+
+1. Decouple runtime resources and restricted execution from Pi preparation, preserving enforcement and explicit capability checks.
+2. Extract the embedded Pi extension and harness-specific configuration, imports and UI behavior into an external integration. Keep provider authentication and generic brokering in Slopbox.
+3. Replace hardcoded Pi launch and mutually exclusive runtime selection with one harness-neutral configuration and command-launch path. Do not silently downgrade existing tool separation.
+4. Validate the generic interfaces with ordinary commands and externally supplied integrations before updating the daily-use configuration and Homebrew release.
+
+See [external integration ownership and migration](integrations.md).
 
 ## Repository and CI hosting
 
@@ -33,7 +42,7 @@ Resize and image paste have been tested interactively with Ghostty on Wayland. T
 
 ## 1. Modular core and native macOS developer support
 
-Extract backend, harness, and model-provider adapters around a shared policy/session core. Pi preparation, Linux execution, and OpenRouter/OpenAI Codex providers now have separate modules, with session/workspace orchestration and broker lifetimes in the shared coordinator. Next validate the native macOS isolation boundary before adding new combinations. Use small built-in Rust interfaces, not a plugin framework or a conditional branch for every platform/harness/provider tuple. See [architecture.md](architecture.md).
+Keep OS backends and model-provider protocols around a shared policy/session core. Earlier modularization put Pi preparation in a separate module, but that is not the final boundary: harness-specific behavior must leave this repository. Session/workspace orchestration and broker lifetimes remain shared. Use small generic interfaces, not a plugin framework or a conditional branch for every platform/harness/provider tuple. See [architecture.md](architecture.md).
 
 The first macOS spike is native Seatbelt execution on an M1/macOS 27 host, using Pi as the regression harness. Native macOS/Xcode tooling is a requirement: a Linux VM must not be the only Mac workflow. Use Anthropic's sandbox runtime as a reference, not as a drop-in policy.
 
@@ -64,11 +73,11 @@ First colleague-facing pairing: Claude Code using Bedrock through a host-owned A
 - Validate streaming, tool calls, cancellation, disconnects, and refresh with the intended work account.
 - Prove that project shell/build processes cannot reach the model broker.
 
-A basic harness adapter needs launch/configuration, brokered model access, isolated tool execution, private persistent session state, and reliable terminal behavior. Pi-style extension integration and UI conveniences can come later; credential confinement cannot.
+Bedrock credential resolution and permitted-request signing are provider work in Slopbox. Claude-specific configuration and tool routing belong in an external integration. Streaming, private state and terminal behavior exercise the generic execution contract; credential confinement cannot depend on a harness-specific exception.
 
 ## 4. Copilot as a provider across harnesses
 
-Copilot means the GitHub Copilot model service, not the Copilot CLI. Target Pi, Codex CLI, and OpenCode through one host-side account implementation, with separate harness/protocol adapters. Claude Code has no native Copilot integration; any gateway-based compatibility work is separate and outside the initial support scope.
+Copilot means the GitHub Copilot model service, not the Copilot CLI. One host-side account implementation may serve supported wire protocols. Any Pi, Codex CLI or OpenCode adapter belongs outside this repository. Claude Code has no native Copilot integration; any gateway-based compatibility work is separate and outside the initial support scope.
 
 Current Pi upstream supports Anthropic Messages, OpenAI Responses, and Chat Completions for Copilot. OpenCode documents Copilot authentication. These establish useful integration points, not proof that every model works with every harness. Current Codex upstream uses Responses for custom providers.
 
@@ -82,7 +91,7 @@ Current Pi upstream supports Anthropic Messages, OpenAI Responses, and Chat Comp
 
 Organization approval for the OAuth application/client and provider terms remain deployment requirements. A working personal account is not sufficient evidence for colleague onboarding.
 
-See [integrations.md](integrations.md) for the target matrix and verification sources.
+See [integrations.md](integrations.md) for the external integration boundary.
 
 ## Private-service access (planned)
 

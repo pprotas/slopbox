@@ -2,7 +2,7 @@
 
 Slopbox policy is intended to be backend-independent. Filesystem preparation, accounts, identities, approvals, authenticated routes, signing, events, and staged changes should survive a backend change.
 
-The primary runtime is NixOS-oriented and Pi is the supported harness. An [experimental native macOS path](macos.md) now runs explicitly selected Pi/Node and separately sandboxed bash on the tested M1/macOS 27 host. Standard Linux without host Nix, broader native Mac tooling and the VM designs below remain planned.
+Linux offers [Nix-backed Pi workflows](poc-linux-runtime.md) without NixOS path assumptions and an opt-in [Nix-free executable runtime](poc-nixless-linux.md). The latter discovers selected native ELF/script dependencies and accepts explicit [application bundles](poc-runtime-bundles.md) for package data and plugins. Unmodified Aider is tested, but complete environment inference and automatic harness/tool separation are not provided. The [experimental native macOS path](macos.md) runs Pi/Node with separately sandboxed bash, or [generic selected executables](poc-native-runtime.md) with shared outer authority. Explicit native bundles and Mach-O dependency roots support package resources and non-system dylibs without installer-specific resolvers. Unmodified Claude Code and generic Pi have local OpenRouter acceptance on the tested M1/macOS 27 host. Complete environment inference and the VM designs below remain planned.
 
 ## Linux
 

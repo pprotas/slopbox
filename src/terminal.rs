@@ -391,6 +391,8 @@ pub fn run(
     // Broker diagnostics must not corrupt Pi's display or the host approval view.
     terminal.diagnostics = Some(Diagnostics::capture()?);
     let mut size = terminal.size()?;
+    // Drop the PTY master before waiting: Darwin exit can block on undrained output.
+    let mut process;
     let (mut master, slave) = open_pty(&terminal.saved, &size)?;
     command
         .stdin(Stdio::from(slave.try_clone()?))
@@ -403,7 +405,7 @@ pub fn run(
             Ok(())
         });
     }
-    let mut process = Process(
+    process = Process(
         command
             .spawn()
             .context("failed to start sandbox terminal")?,

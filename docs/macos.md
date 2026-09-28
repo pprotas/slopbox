@@ -1,6 +1,6 @@
 # Experimental native macOS launcher
 
-The native path uses Slopbox's normal coordinator and gateway, an explicitly selected, unmodified Pi/Node runtime, and separately sandboxed bash. Host-tool sessions need neither a VM nor Nix. This is not the complete Linux feature set or a cross-version support claim.
+The native path uses Slopbox's normal coordinator and gateway. It supports an explicitly selected Pi/Node runtime with separately sandboxed bash, or [generic selected executables](poc-native-runtime.md) without Pi configuration. Host-tool sessions need neither a VM nor Nix. This is not the complete Linux feature set or a cross-version support claim.
 
 Tested on Apple silicon, macOS 27.0 build 26A428, Node 24.9.0 and Pi 0.85.1. A logged-in GUI launchd domain and `/usr/bin/sandbox-exec` are required. No installations or security-setting changes are performed automatically.
 
@@ -21,7 +21,7 @@ nix flake check
 
 Run these on the host, not inside Slopbox. `result/bin/slopbox` is the packaged executable; it has no Linux wrapper or dependency on Bubblewrap/Wayland. The shell supplies Rust, Cargo, Clippy, rustfmt, Git and nixfmt. Nix's Darwin stdenv supplies the compiler and SDK.
 
-`nix build` and `nix flake check` run the package tests plus installed `--version`/`--help` checks. Darwin packages also reject non-system dylib dependencies, so copied workers do not need Nix-store read grants. This install check uses the host's `/usr/bin/otool`. The Darwin build skips the coalition, system-diff and private-PTY tests; the host `cargo test` command above runs them. Build tests allow loopback for disposable HTTP upstreams, not Internet access. Ignored launchd/Seatbelt/PTY integration tests remain separate host checks below. The `e2e` app remains Linux-only.
+`nix build` and `nix flake check` run the package tests plus installed `--version`/`--help` checks. Darwin packages also reject non-system dylib dependencies, so copied workers do not need Nix-store read grants. This install check uses the host's `/usr/bin/otool`. The Darwin build skips the coalition, system-diff, private-PTY and set-id-file tests; the host `cargo test` command above runs them. Build tests allow loopback for disposable HTTP upstreams, not Internet access. Ignored launchd/Seatbelt/PTY integration tests remain separate host checks below. The `e2e` app remains Linux-only.
 
 This packages Slopbox, not its selected Pi/Node runtime. Keep the explicit host runtime configuration below. Building or entering a host Nix shell does not import that shell into Slopbox; project activation is selected separately at launch.
 
@@ -33,7 +33,11 @@ Without Nix, use the installed Rust toolchain:
 cargo build --locked
 ```
 
-## Run
+## Generic commands
+
+Host-owned `[runtime].executables` enables ordinary command launch with `harness=none`. It accepts native Mach-O executables, explicitly selected application bundles, and dylib closure discovery beneath authorized dependency roots. Simple scripts require selected interpreters; unresolvable loader contexts fail closed. It preserves the native supervisor and Seatbelt boundary; subprocesses share outer authority rather than acquiring Pi's tool separation. See [configuration and enforcement tests](poc-native-runtime.md) and [native Claude Code acceptance](poc-claude-code.md).
+
+## Run Pi
 
 Add the selected runtime to the **host** `~/.config/slopbox/config.toml` (or `$XDG_CONFIG_HOME/slopbox/config.toml`). Use the actual Node executable, not a version-manager shim, and Pi's installed `dist/cli.js`:
 

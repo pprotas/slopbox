@@ -6,8 +6,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 
-pub fn namespace_probe(bwrap: &Path, bash: &Path) -> Result<String> {
-    let arguments = [
+pub fn namespace_probe(
+    bwrap: &Path,
+    bash: &Path,
+    runtime: Option<&crate::backend::RuntimePlan>,
+) -> Result<String> {
+    let mut namespace = Command::new(bwrap);
+    namespace.args([
         "--die-with-parent",
         "--new-session",
         "--unshare-user",
@@ -20,9 +25,20 @@ pub fn namespace_probe(bwrap: &Path, bash: &Path) -> Result<String> {
         "--cap-drop",
         "ALL",
         "--clearenv",
-        "--ro-bind",
-        "/nix/store",
-        "/nix/store",
+    ]);
+    if let Some(runtime) = runtime {
+        for path in &runtime.read_only_paths {
+            super::add_parent_dirs(&mut namespace, path);
+            namespace.arg("--ro-bind").arg(path).arg(path);
+        }
+        for (path, target) in &runtime.system_links {
+            super::add_parent_dirs(&mut namespace, path);
+            namespace.arg("--symlink").arg(target).arg(path);
+        }
+    } else {
+        namespace.args(["--ro-bind", "/nix/store", "/nix/store"]);
+    }
+    namespace.args([
         "--proc",
         "/proc",
         "--dev",
@@ -31,15 +47,21 @@ pub fn namespace_probe(bwrap: &Path, bash: &Path) -> Result<String> {
         "/tmp",
         "--chdir",
         "/",
+        "--remount-ro",
+        "/",
         "--",
-    ];
+    ]);
+    let arguments: Vec<_> = namespace
+        .get_args()
+        .map(|argument| argument.to_os_string())
+        .collect();
     let mut command = Command::new(bwrap);
     command
         .env_clear()
         .current_dir("/")
-        .args(arguments)
+        .args(&arguments)
         .arg(bwrap)
-        .args(arguments)
+        .args(&arguments)
         .arg(bash)
         .args(["--noprofile", "--norc", "-c", "exit 0"]);
     super::close_inherited_descriptors(&mut command);

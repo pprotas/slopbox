@@ -72,19 +72,35 @@ pub(crate) fn unavailable<T>() -> Result<T> {
 }
 
 pub(crate) fn ensure_supported() -> Result<()> {
-    crate::session::macos_config()?.ok_or_else(|| anyhow::anyhow!("native macOS launch is not enabled: configure macos.node and macos.pi_cli in host configuration; see docs/macos.md (no unsandboxed fallback)"))?;
+    let (pi, selected) = crate::session::macos_config()?;
+    ensure!(
+        pi.is_some() || selected.is_some(),
+        "native macOS launch is not enabled: configure host [runtime] executables or macos.node and macos.pi_cli; see docs/macos.md (no unsandboxed fallback)"
+    );
     Ok(())
 }
 
 pub(crate) fn validate(
-    config: &Config,
+    config: Option<&Config>,
+    generic: bool,
     workspace: &Path,
     policy: Policy,
     command: &[OsString],
     dev_env: crate::DevEnvironment,
     dry_run: bool,
 ) -> Result<()> {
-    let config = config.resolve()?;
+    validate_policy(policy)?;
+    ensure!(!dry_run, "native dry-run is not enabled");
+    if generic {
+        ensure!(
+            policy.harness == crate::policy::HarnessMode::None,
+            "generic native commands require harness=none"
+        );
+        return Ok(());
+    }
+    let config = config
+        .context("native Pi runtime is not configured")?
+        .resolve()?;
     ensure!(
         !config.node.starts_with(workspace)
             && !config
@@ -126,8 +142,13 @@ pub(crate) fn validate_policy(policy: Policy) -> Result<()> {
 }
 
 pub(crate) fn sandbox_path() -> Result<OsString> {
-    let config = crate::session::macos_config()?.context("native runtime is not configured")?;
-    let config = config.resolve()?;
+    let (config, selected) = crate::session::macos_config()?;
+    if selected.is_some() {
+        return Ok("/usr/bin:/bin".into());
+    }
+    let config = config
+        .context("native runtime is not configured")?
+        .resolve()?;
     std::env::join_paths([
         config.node.parent().unwrap(),
         Path::new("/usr/bin"),
@@ -319,7 +340,7 @@ impl Session {
                 .to_owned(),
             })
         };
-        let config = &plan.runtime.native.config;
+        let generic = plan.runtime.native.config.is_none();
         let environment = |tool: bool| -> Result<Vec<String>> {
             let mut values = vec![format!(
                 "PATH={}",
@@ -337,6 +358,9 @@ impl Session {
                 "SHELL=/bin/bash".into(),
                 "SLOPBOX_SANDBOX=1".into(),
             ]);
+            if generic {
+                values.push("GIT_CONFIG_NOSYSTEM=1".into());
+            }
             let gitconfig = plan.session_dir.join("gitconfig");
             if gitconfig.is_file() {
                 values.retain(|value| {
@@ -357,8 +381,25 @@ impl Session {
                 &plan.harness.environment
             }) {
                 let name = name.to_str().context("invalid environment name")?;
+                if name == "SLOPBOX_ACCOUNT_CA" {
+                    if tool || generic {
+                        let endpoint = plan
+                            .brokers
+                            .authenticated_http
+                            .as_ref()
+                            .context("account TLS broker is unavailable")?;
+                        values.extend([
+                            format!(
+                                "SLOPBOX_ACCOUNT_CA={}",
+                                value.to_str().context("invalid account trust path")?
+                            ),
+                            format!("SLOPBOX_ACCOUNT_PROXY=http://127.0.0.1:{}", endpoint.port),
+                        ]);
+                    }
+                    continue;
+                }
                 if name == "SLOPBOX_GITHUB_CONFIG" {
-                    if tool {
+                    if tool || generic {
                         for (name, value) in crate::github::environment(Path::new(value)) {
                             values.push(format!(
                                 "{}={}",
@@ -391,6 +432,33 @@ impl Session {
             }
             Ok(values)
         };
+        if generic {
+            let temporary = plan.session_dir.join("tmp");
+            fs::DirBuilder::new().mode(0o700).create(&temporary)?;
+            let mut values = environment(false)?;
+            values.push(format!("TMPDIR={}", temporary.display()));
+            values.extend(["USER=slopbox".into(), "LOGNAME=slopbox".into()]);
+            values.push(format!(
+                "TERM={}",
+                std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into())
+            ));
+            let arguments = std::iter::once(OsString::from("/usr/bin/env"))
+                .chain(child.iter().cloned())
+                .map(|value| {
+                    value
+                        .to_str()
+                        .map(str::to_owned)
+                        .context("native command arguments must be UTF-8")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(self.engine.command(&role(false)?, &values, &arguments)?);
+        }
+        let config = plan
+            .runtime
+            .native
+            .config
+            .as_ref()
+            .context("missing Pi runtime")?;
         let activation = match plan.dev_environment {
             Some(environment) => vec![
                 environment
@@ -509,12 +577,30 @@ pub(crate) mod diagnostics {
         policy: Policy,
         checks: &mut Vec<(&'static str, Result<String>)>,
         notes: &mut Vec<String>,
+        selection: Option<&crate::backend::RuntimeSelection>,
     ) {
+        if let Some(selection) = selection {
+            checks.push((
+                "Native executable runtime",
+                runtime::selected::prepare(selection, workspace).map(|runtime| {
+                    format!(
+                        "{} literal runtime grants checked; application not executed",
+                        runtime.native.selected_files.len()
+                    )
+                }),
+            ));
+            checks.push((
+                "Native policy",
+                validate_policy(policy).map(|()| "Seatbelt generic command policy".into()),
+            ));
+            notes.push("Generic commands share their outer role's authority; no automatic harness/tool separation. Launchd, execution and provider connectivity are not probed.".into());
+            return;
+        }
         checks.push((
             "Native backend",
             (|| {
                 ensure_supported()?;
-                let config = crate::session::macos_config()?
+                let config = crate::session::macos_config()?.0
                     .context("missing native runtime")?
                     .resolve()?;
                 ensure!(

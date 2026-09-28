@@ -35,7 +35,7 @@ Profiles are presets with contracts, not a single “strictness” slider. Works
 
 Host-owned global configuration is authoritative. Project configuration is untrusted: it may describe an environment and request capabilities, but cannot grant them. Session approvals are host control-plane decisions. The pure policy core represents these presets and restrictive merge semantics, and `slopbox policy` displays the effective host policy. Developer and contained have native enforcement implementations; `slopbox run` rejects adversarial policies rather than silently weakening them. A project-local `.slopbox.toml` may request a more restrictive policy; restrictive merge semantics prevent it from expanding the host grant. Unknown fields and symlinked manifests are rejected. Unsupported image-runtime, observe-network, ephemeral-persistence, or microVM combinations are rejected at launch.
 
-Bare `slopbox` launches Pi using a host-owned setup record bound to the canonical workspace. First-run setup happens before sandbox creation, displays the effective access, and requires an explicit terminal confirmation or `init --changes ... --yes`. The saved policy axes form an additional ceiling for default launch, explicit `run`, and inspection. Removing or weakening a repository manifest cannot exceed that saved ceiling. Re-running host-side `init` explicitly replaces it after review; global route, identity, and resource declarations remain host-controlled rather than frozen by the record.
+With a host `default_command`, bare `slopbox` uses ordinary command execution and any existing saved policy ceiling. Otherwise, the legacy default launches Pi using a host-owned setup record bound to the canonical workspace. First-run setup happens before sandbox creation, displays the effective access, and requires an explicit terminal confirmation or `init --changes ... --yes`. The saved policy axes form an additional ceiling for default launch, explicit `run`, and inspection. Removing or weakening a repository manifest cannot exceed that saved ceiling. Re-running host-side `init` explicitly replaces it after review; global route, identity, and resource declarations remain host-controlled rather than frozen by the record.
 
 Setup never writes repository policy or modifies the global configuration. Generated records use private permissions and atomic replacement under a per-project lock; a concurrent setup change invalidates an outstanding confirmation. Symlinked setup directories/files and records naming another workspace are rejected. Setup display text escapes terminal controls. The advanced `run` interface remains available without initialization and retains its existing model-authority semantics.
 
@@ -49,7 +49,7 @@ host Slopbox supervisor
 ├── project and session state outside the workspace
 ├── per-run general HTTP/HTTPS gateway
 ├── fixed OpenRouter and OpenAI Codex reverse-proxy routes
-├── workspace-bound authenticated HTTP routes
+├── host-selected authenticated HTTP routes
 ├── Host command/SOPS/environment secret resolution
 ├── fingerprint-selected Git SSH-signing broker
 ├── real OpenRouter key in host memory
@@ -80,6 +80,18 @@ Only tools receive the selected closure's read-only grants. `runtime=host` retai
 
 Each Nix profile root lives in the native session's control directory. Successful task cleanup removes it; uncertain native recovery retains it with the journal. Local preparation/activation/profile tests pass. Pawel reports the Nix build and compiler/linker/enforcement fixture passing on the host. A fresh actual Pi session independently ran the focused tests, formatting and strict Clippy using its selected Nix toolchain, and exercised brokered Git reads. See [native setup and validation](docs/macos.md#project-nix-environments).
 
+## Native macOS generic commands
+
+For noninteractive generic execution, explicitly inherited regular standard files receive literal metadata-only grants so applications can inspect their own descriptors. This does not grant path-based read/write access to those files or their directories. Host-owned guest environment configuration expands only public broker values and private HOME/TMPDIR, not host environment variables or secrets. The native Keychain secret source runs in the host coordinator; it adds no guest Keychain access.
+
+Host-owned `[runtime].executables` also supports generic native commands without Pi configuration. This requires `runtime=host`, `harness=none` and no project activation. Discovery parses native Mach-O dependencies and simple scripts without executing them. Explicit dependency roots authorize discovered dylib files and aliases, never whole-prefix reads. Explicit bundles grant entire read-only application trees, including their code and data. The existing launchd/coalition ownership, broker leases, descriptor handling and cleanup remain in use.
+
+Selected files receive literal read and execution grants, with ancestor metadata only. Execution permission is enforced separately from reading: an unreadable but unselected executable must not become executable. Workspace/private-home/private-temporary code may execute. The existing native system-library/locale base remains available, with protected system ICU data files granted literally and read-only. Workspace/credential/control overlaps, non-system hard-link aliases and setuid/setgid selections are rejected. Filesystem identities reject private case aliases as well as ordinary path aliases. Bundle traversal also rejects special files, submounts, escaping links and excessive trees. Missing or ambiguous loader contexts fail closed; host installation stability remains a prerequisite.
+
+Generic sessions use a persistent per-workspace private home, separate from legacy Pi state, and per-run temporary storage. Host initialization validates the home root without traversing or repairing guest-controlled contents; symlinked or non-private roots fail closed. The guest cannot rename or unlink that root. State persists within a workspace, not between unrelated workspaces, and is not isolation between concurrent sessions of the same workspace. Named application Unix IPC is not enabled: a home-prefix grant was found unsafe when a workspace socket was moved into that home. Host-socket symlink, hard-link and rename probes remain denied; only explicitly attached broker sockets are available. Signals are limited to the same sandbox. No Keychain/Mach service or shared temporary-directory access is added. Seatbelt is not a private filesystem/PID namespace: denied file reads do not imply hidden path existence or all host metadata.
+
+All generic subprocesses retain outer account/model authority. There is no automatic native tool adapter or generic `tool-run` role. Only the legacy Pi integration keeps its existing separate tool role; generic unmodified Pi does not use it. Production-launcher enforcement and unmodified Claude Code Read/Edit/Bash/streaming fixtures pass locally with disposable credentials. Separate opt-in OpenRouter/Haiku tests validate live native authentication, basic terminal interaction and cross-run Claude resume with a host-held, credit-limited key. A separate opt-in unmodified Pi fixture passes streamed OpenRouter read/edit/bash turns through the ordinary proxy without the embedded extension. These tests do not establish subscription authentication, arbitrary provider/feature compatibility or full Linux parity. See [native runtime limits and tests](docs/poc-native-runtime.md).
+
 ## Filesystem boundary
 
 ### Exposed
@@ -89,8 +101,9 @@ Each Nix profile root lives in the native session's control directory. Successfu
 - Trusted Pi extension and wrapper, read-only. Pi's separate private settings and synthetic authentication state remain writable.
 - A generated read-only copy of host `~/.pi/agent/AGENTS.md`, when present, and an allowlisted copy of Pi settings.
 - Selected global Pi resources according to the effective `trusted`, `data`, or `none` harness mode.
-- Developer: entire host `/nix/store` and NixOS system profile, read-only, `nosuid`, and `nodev`.
+- Nix-backed developer: entire host `/nix/store` and, when present, a Nix-store-backed NixOS system profile, read-only, `nosuid`, and `nodev`.
 - Contained: only the queried closure of the project development profile and required Slopbox, Pi, shell, loader, certificate, and bubblewrap runtime roots.
+- Opt-in selected-executable runtime: individual native ELF/script dependencies, the host loader cache and generated command aliases. Optional host-owned `runtime.bundles` grants dedicated application trees read-only, including their code and data. No implicit whole-prefix, library-directory or home import.
 - Selected read-only `/etc` files and certificate directories.
 - Private `/proc`, `/dev`, and `/tmp`.
 - Slopbox runtime executable and gateway socket directory.
@@ -98,7 +111,7 @@ Each Nix profile root lives in the native session's control directory. Successfu
 
 ### Not exposed
 
-- Host home except for the directory chain needed to reach the workspace and the explicit read-only Pi resource mounts described below.
+- Host home except for the directory chain needed to reach the workspace and explicitly selected runtime files/bundles or Pi resources described below.
 - Sibling projects.
 - Host `/tmp`.
 - Host `/run/user/$UID`.
@@ -113,10 +126,12 @@ Slopbox rejects:
 - `/` as a workspace.
 - The host home or an ancestor containing it.
 - A workspace containing Slopbox configuration or state.
+- Linux workspaces overlapping `/nix/store`, which would undermine the read-only runtime grant.
+- Linux workspaces overlapping the private home or Slopbox guest control paths. Selected runtime files cannot overlap the workspace.
 - Unexpected existing submounts.
 - Unix sockets visible during startup.
 
-Mount propagation is private. Unintended inherited file descriptors are closed before execution.
+Mount propagation is private. The generated Linux root filesystem is remounted read-only, protecting runtime aliases; separate workspace, private home and tmp mounts retain their intended writability. Unintended inherited file descriptors are closed before execution.
 
 ### Pi configuration import
 
@@ -136,7 +151,15 @@ Trusted host extensions execute inside Pi's outer process. They can read the mou
 
 ### Explicit filesystem exceptions
 
-In the developer profile, the whole Nix store is readable and may contain source copies from unrelated flakes. Read-only access prevents modification, not disclosure. Its sandbox PATH includes host PATH entries that canonically resolve into the store, and `/run/current-system/sw` is mounted read-only. These binaries do not inherit host filesystem, credential, service-socket, or network authority, but they expose ambient host tooling, reduce reproducibility, and increase parser and shared-kernel attack surface.
+In the default Nix-backed developer runtime, the whole Nix store is readable and may contain source copies from unrelated flakes. Read-only access prevents modification, not disclosure. Its sandbox PATH includes host PATH entries that canonically resolve into the store. An existing `/run/current-system/sw` is mounted read-only only if it resolves into the store; it is not required. These binaries do not inherit host filesystem, credential, service-socket, or network authority, but they expose ambient host tooling, reduce reproducibility, and increase parser and shared-kernel attack surface.
+
+The Nix-backed runtime constructs guest `/bin/sh` and `/usr/bin/env` links from selected Nix executables, not the host distribution's binaries. Nix helpers require canonical-store PATH directories and executable regular files; mutable non-store bin directories cannot supply Nix aliases. Linux host helpers also accept root-owned system executables with non-group/world-writable ancestry, including the unresolved lookup path. Merely selecting a guest executable does not authorize it as a host helper. Flake and closure operations explicitly enable the required Nix features in their own process; they do not modify host Nix configuration. A stock Ubuntu/OrbStack installation with single-user Nix passed the full enforcement suite without changing distro executables or creating a NixOS system profile. Hosts still need usable outer and nested user namespaces; Slopbox does not bypass host restrictions or fall back to unsandboxed execution. The separate opt-in Nix-free runtime is described below.
+
+The opt-in `[runtime]` selection discovers native ELF dependencies and simple script interpreters without running selected programs or `ldd`. Only explicitly selected files, protected root-owned installations and host-declared dependency prefixes are eligible. Metadata is not permission to import arbitrary host files. Prefixes authorize discovered files, not directory mounts; known credential/control roots, workspace overlaps, private guest paths and user-owned hard links are rejected. The host loader cache exposes installed library path metadata, not those libraries' contents unless selected. Runtime files must remain stable during a session; discovery is not an atomic snapshot.
+
+Optional host-owned `runtime.bundles` explicitly grants whole application trees as read-only code and data. Bundle selection is distinct from dependency-root authorization: every file in a bundle is readable, not only inferred dependencies. Startup traversal rejects known credential/control and workspace overlaps, private guest paths, broad system roots, mutable hard links, special files and submounts. Data/directory symlinks cannot expand the grant; native ELF links use the same dependency authorization as ELF metadata. Native objects are inspected without execution, including libraries referenced by plugins. Bundled filenames/SONAMEs may supply already-granted dependencies whose caller's loader paths cannot be inferred; this does not change the guest loader's search paths or promise complete dynamic linking. Nothing imports package-manager caches or follows package manifests to authorize additional roots. Keep secrets out of approved installations. Tree validation is startup-only: host changes, including later socket creation, are not prevented. See [bundle acceptance and limitations](docs/poc-runtime-bundles.md).
+
+This mode requires a non-root host user, `runtime=host` and `harness=none`. Integrated Pi launch/setup is rejected rather than downgraded. Explicit generic commands have their outer role's authority; cooperative `tool-run` provides the existing stronger model/tool boundary. Inner execution uses an immutable session bubblewrap entry, not a caller-controlled PATH lookup. Application resources outside explicit bundles and additional subprocess entry points are not inferred; missing resources remain unavailable. An unmodified Aider fixture validates package resources, mediated model requests and edits across workspaces, and confirms that its test subprocess retains fixed-model-broker access until explicitly entering `tool-run`. A [native Claude Code fixture](docs/poc-claude-code.md) validates streamed Anthropic-compatible requests and built-in Read/Edit/Bash tools through the same account transport, without Linux core changes or real provider access. These account-scoped inference routes remain available to tools; this is not inference isolation for either harness or an automatic harness/tool adapter. See [limits and Nix-free enforcement tests](docs/poc-nixless-linux.md).
 
 The contained profile requires an activated flake development environment. The host queries its requisites together with required Slopbox, Pi, shell, loader, certificate, and nested-bubblewrap roots, mounts only those top-level store paths, filters the inherited PATH to mounted roots, and does not mount `/run/current-system/sw`. The selected closure can still contain project source, compilers, interpreters, or other build inputs; closure restriction reduces ambient disclosure and tooling but does not make declared dependencies trustworthy.
 
@@ -168,7 +191,7 @@ The current runner uses bubblewrap with:
 - A private process view.
 - No host process descriptors inherited.
 
-Inside the nested user namespace, the process is UID 1000. Although an inner `uid_map` can show a mapping through intermediate UID 0, the initial host namespace sees sandbox processes as the invoking host user, currently UID 1000, not host root.
+The boundary assumes an unprivileged invoking host user. Namespace UID numbers vary; an inner `uid_map` can include intermediate UID 0, but sandbox processes map back to that invoking user in the initial host namespace. The original NixOS audit used UID 1000. The selected-executable runtime explicitly rejects host UID 0; running Slopbox as host root is not a qualified security configuration.
 
 Creating another nested user namespace currently works and grants capabilities scoped to that new namespace. `slopbox tool-run` intentionally uses this facility for an inner tool sandbox. Tests found no way to use nested capabilities to remount parent filesystems or access host devices. This still increases shared-kernel attack surface and is not a guarantee against kernel vulnerabilities.
 
@@ -180,13 +203,15 @@ The sandbox has loopback but no direct external interface or route. Applications
 
 In an online `developer` session, Pi may refresh its remote model catalog through the general gateway. A first request to a catalog destination such as `pi.dev:443` is denied and recorded until the host approves it; reopening `/model` or running `pi update --models` retries the request. Catalog state is cached in the project-private Pi home. Stricter profiles set `PI_OFFLINE=1`, so model availability is limited to bundled or deliberately supplied metadata even when separate model inference routes remain enabled.
 
-Host configuration may define named secrets and workspace-bound authenticated HTTP routes. Credential commands and SOPS run only on the host through trusted packaged executables. Command arguments are literal, ambient credentials are not inherited, stdout is bounded, and stderr/failed output are not logged. Resolved credentials stay in supervisor memory; host login stores, SOPS identities, plaintext secrets, and real authorization headers are not mounted or exported. Each route fixes an HTTPS upstream base, method allowlist, authentication scheme, and canonical workspace. The guest receives a local route name and synthetic base URL. Slopbox rejects redirects, inherited proxies, unsafe encoded path traversal, guest-supplied authentication, non-public upstream addresses unless explicitly enabled by the host route, encoded responses, and exact reflected secret bytes. Routes are available to shell/build code by design, so arbitrary project code can exercise the complete authority granted by that route and upstream account. Repository permissions and branch protection remain essential.
+Host configuration may define named secrets and authenticated HTTP routes selected by shared host defaults and canonical directory rules, or by legacy exact-workspace bindings. Unbound definitions are dormant unless selected. Directory rules can replace account selections or disable signing/accounts; repository configuration cannot grant them. Credential commands and SOPS run only on the host through trusted packaged helpers or, on Linux, protected root-owned system executables. Command arguments are literal, ambient credentials are not inherited, stdout is bounded, and stderr/failed output are not logged. Resolved credentials stay in supervisor memory; host login stores, SOPS identities, plaintext secrets, and real authorization headers are not mounted or exported. Each route fixes an HTTPS upstream base, method allowlist and authentication scheme. An optional canonical workspace binding remains a ceiling even when selected through host defaults. The guest receives a local route name and synthetic base URL. Slopbox does not follow redirects or inherit host proxies. It rejects unsafe encoded path traversal, non-public upstream addresses unless explicitly enabled by the host route, and encoded responses. Guest authentication is replaced and exact reflected secret bytes are redacted. Routes are available to shell/build code by design, so arbitrary project code can exercise the complete authority granted by that route and upstream account. Repository permissions and branch protection remain essential.
+
+Experimental `proxy = true` routes accept HTTPS CONNECT through the account broker, using session-local public trust and preissued origin certificates whose private keys stay host-side. The ephemeral CA signing key is discarded after certificate issuance. CONNECT authority, TLS server name and HTTP Host must agree; decrypted HTTP/1.1 requests reuse the existing route checks. Unknown origins, duplicate Host/Content-Length fields, Transfer-Encoding and unsafe paths fail closed. Clients must explicitly trust the session CA. Attached mediated origins are also served through the ordinary proxy; host trust and approval requirements for other origins are unchanged. Local protocol tests cover verified upstream TLS, authentication replacement, redaction, authority substitution, framing and curl/Node interoperability. Native macOS and Linux fixtures separately verify read-only trust, host-config/direct-network denial and tool environment separation across two workspaces. The Linux fixture uses a verified local HTTPS upstream, verifies signed commits from one shared identity in both workspaces, and checks a directory rule that disables accounts/signing in a third. The native fixture uses the existing test-only HTTP pin upstream; protocol tests separately verify upstream TLS. These tests use disposable credentials and do not establish arbitrary-client compatibility.
 
 Opted-in origin-addressed routes share these checks through a private Unix socket. Stock `gh` receives generated transport configuration and synthetic authentication in the tool role, not the host login. Host/path matching must select exactly one configured route. GraphQL authority cannot be narrowed to a repository by an HTTP path; a GraphQL route needs appropriately restricted provider-side credentials.
 
 A host route may list `git_urls` to generate session-private Git `url.*.insteadOf` rules. Both the outer process and inner tools read the generated configuration; repository remotes are not modified, SSH agents are not forwarded, and no Git signing identity is required. These are Git prefix rewrites for convenience, not an additional security boundary. Fixed upstream routes, method restrictions, and provider permissions still determine authority. Project Git configuration may interfere with rewriting but cannot obtain the host credential.
 
-Host configuration may also assign a Git identity and SSH signing-key fingerprint to one canonical workspace. The supervisor selects exactly one matching public key from the host SSH agent. The agent socket and private key are never mounted or exported. A dedicated Unix-socket broker accepts only bounded Git commit objects whose author and committer match the configured identity, then asks `ssh-keygen` to produce an SSHSIG signature in the `git` namespace. This grants project code authority to create signed commits as that identity; it does not grant SSH authentication or raw SSH-agent access. Project code can still create or push unsigned commits, so repositories that require signatures must enforce that policy server-side.
+Host configuration may also define reusable Git identities and SSH signing-key fingerprints selected by host defaults/directory rules, while preserving optional exact-workspace bindings. The supervisor selects exactly one matching public key from the host SSH agent. The agent socket and private key are never mounted or exported. A dedicated Unix-socket broker accepts only bounded Git commit objects whose author and committer match the configured identity, then asks `ssh-keygen` to produce an SSHSIG signature in the `git` namespace. This grants project code authority to create signed commits as that identity; it does not grant SSH authentication or raw SSH-agent access. Project code can still create or push unsigned commits, so repositories that require signatures must enforce that policy server-side.
 
 The general gateway:
 
@@ -200,7 +225,7 @@ The general gateway:
 - Deduplicates identical denial events within a session.
 - Keeps approval operations outside the guest-accessible protocol.
 
-Ordinary HTTPS remains an opaque CONNECT tunnel. Once a hostname is approved, the gateway cannot restrict methods or paths inside that TLS connection. Approval controls destinations, not data flow.
+The ordinary proxy first routes CONNECT for an attached `proxy = true` account origin through account TLS mediation. Its method/path/trust checks cannot fall back to a raw tunnel on failure, even with general approval. Other destinations retain opaque CONNECT and normal approval checks; the account-only proxy still denies unknown origins. Client trust remains explicit and host trust is unchanged. Once an ordinary opaque destination is approved, the gateway cannot restrict methods or paths inside that TLS connection. Approval controls destinations, not data flow.
 
 Direct requests that never reach the proxy do not generate denial events. They fail because the sandbox has no route or resolver access.
 
@@ -208,7 +233,7 @@ Direct requests that never reach the proxy do not generate denial events. They f
 
 `slopbox status` reads global host policy, saved host-side setup, and narrowing repository policy, discovers permitted resource paths, and reports the next launch's access. Verbose output includes policy axes and mount targets. It checks only configuration presence for model providers; it does not read credential contents, decrypt secrets, query signing keys, evaluate Nix environments, or contact upstream services. It does not create project state and is not a live-session inventory or readiness check.
 
-`slopbox doctor` additionally checks launch prerequisites and probes outer and nested native namespaces with a five-second timeout. The probe executes host Nix-store bubblewrap and a fixed Bash `exit 0`, clears the environment, closes inherited descriptors on supported kernels, and mounts only the read-only Nix store plus private proc/dev/tmp filesystems. It exposes neither workspace nor broker sockets. Diagnostics do not start Pi, run project or extension code, evaluate Nix, resolve account secrets, query signing keys, contact upstream services, or change project state/approvals. The temporary diagnostic file is removed after the probe. Passing these checks does not validate a complete launch, provider access, signing, or Nix realization.
+`slopbox doctor` additionally checks launch prerequisites and probes outer and nested native namespaces with a five-second timeout. The probe executes trusted host bubblewrap and a fixed Bash `exit 0`, clears the environment, closes inherited descriptors on supported kernels, and mounts the read-only Nix store or selected files/bundles plus private proc/dev/tmp filesystems. ELF discovery invokes only the protected system `ldconfig -p` to read loader-cache metadata; selected programs and scripts are not executed during discovery. It exposes neither workspace nor broker sockets. Diagnostics do not start Pi, run project or extension code, evaluate Nix, resolve account secrets, query signing keys, contact upstream services, or change project state/approvals. The temporary diagnostic file is removed after the probe. Passing these checks does not validate a complete launch, provider access, signing, or Nix realization.
 
 ## Approval boundary
 
@@ -373,9 +398,9 @@ The native backend now has independent data planes:
 
 ```text
 general gateway
-  approved HTTP/HTTPS traffic
+  approved opaque HTTP/HTTPS egress
   denial lookup
-  no provider credentials
+  explicitly attached account TLS mediation
 
 model gateway
   fixed provider routes
@@ -468,7 +493,7 @@ Seccomp policy must account for browsers and development tools that legitimately
 
 Evaluate [Verus](https://github.com/verus-lang/verus) for a small I/O-free policy crate after the split-gateway semantics stabilize. Candidate executable invariants include:
 
-- A general-gateway decision can never attach a provider credential.
+- A general-egress approval cannot authorize credential injection; that requires an explicit account route.
 - The model gateway can authorize only a fixed provider, method, and path.
 - Reserved addresses are denied regardless of user approvals.
 - DNS resolution is requested only after hostname authorization.

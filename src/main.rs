@@ -7,6 +7,7 @@ mod gateway;
 mod git_config;
 mod git_signing;
 mod github;
+mod guest_environment;
 mod harness;
 mod http;
 mod launch;
@@ -30,7 +31,7 @@ use policy::{Profile, WorkspaceMode};
     name = "slopbox",
     version,
     about,
-    after_help = "Run slopbox without a subcommand to start Pi here. Pass Pi options after --.",
+    after_help = "Run a command with slopbox run -- COMMAND. Configure default_command for bare slopbox; pass additional arguments after --.",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
@@ -41,8 +42,8 @@ struct Cli {
     #[arg(long)]
     approval_view: bool,
 
-    /// Arguments passed to Pi when no subcommand is given (after --).
-    #[arg(last = true, allow_hyphen_values = true, value_name = "PI_ARGUMENTS")]
+    /// Arguments appended to the configured default command (after --).
+    #[arg(last = true, allow_hyphen_values = true, value_name = "ARGUMENTS")]
     agent_arguments: Vec<OsString>,
 }
 

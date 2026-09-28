@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,20 +12,38 @@ use crate::DevEnvironment;
 use crate::policy::RuntimeMode;
 
 use crate::backend::nix::store_root;
-use crate::backend::{PreparedDevEnvironment, RuntimePlan, RuntimeStore, nix};
+use crate::backend::{PreparedDevEnvironment, RuntimePlan, nix};
 
-pub(crate) fn system_nix() -> Result<PathBuf> {
-    let nix = fs::canonicalize("/run/current-system/sw/bin/nix")
-        .context("project flakes require /run/current-system/sw/bin/nix on the host")?;
-    ensure!(
-        nix.starts_with("/nix/store"),
-        "system Nix resolves outside /nix/store"
-    );
-    ensure!(
-        nix.is_file() && fs::metadata(&nix)?.permissions().mode() & 0o111 != 0,
-        "system Nix is not executable; repair the host Nix installation"
-    );
-    Ok(nix)
+pub(crate) fn host_nix() -> Result<PathBuf> {
+    crate::command::trusted_executable("nix")
+        .context("project flakes require a Nix-installed nix executable on host PATH")
+}
+
+fn nix_command() -> Result<Command> {
+    let mut command = Command::new(host_nix()?);
+    command
+        .env_clear()
+        .env("HOME", env::var_os("HOME").context("HOME is not set")?)
+        .env("PATH", super::sandbox_path()?)
+        .args(["--extra-experimental-features", "nix-command flakes"]);
+    Ok(command)
+}
+
+fn system_links(path: &OsStr) -> Result<Vec<(PathBuf, PathBuf)>> {
+    let mut links = vec![
+        ("/bin/sh".into(), find_executable("bash", path)?),
+        ("/usr/bin/env".into(), find_executable("env", path)?),
+        ("/run/slopbox/bwrap".into(), find_executable("bwrap", path)?),
+    ];
+    if env::var_os("NIX_LD").is_some() {
+        let loader = Path::new("/lib64/ld-linux-x86-64.so.2");
+        if loader.exists() {
+            let target = loader.canonicalize()?;
+            store_root(&target).context("NIX_LD requires a Nix-store loader shim")?;
+            links.push((loader.to_path_buf(), target));
+        }
+    }
+    Ok(links)
 }
 
 pub(crate) fn prepare_dev_environment(
@@ -38,16 +55,10 @@ pub(crate) fn prepare_dev_environment(
         return Ok(None);
     }
 
-    let nix = system_nix()?;
-
     let profile = session_dir.join("dev-profile");
     let script = session_dir.join("dev-env.sh");
     let temporary = session_dir.join(".dev-env.sh");
-    let mut command = Command::new(nix);
-    command
-        .env_clear()
-        .env("HOME", env::var_os("HOME").context("HOME is not set")?)
-        .env("PATH", "/run/current-system/sw/bin");
+    let mut command = nix_command()?;
     let profile = nix::realize(&mut command, workspace_source, &profile, &temporary, false)?;
 
     fs::rename(&temporary, &script).with_context(|| {
@@ -66,10 +77,26 @@ pub(crate) fn prepare_runtime(
     harness_executable: Option<&Path>,
     git_signing: bool,
     dry_run: bool,
+    selected: Option<RuntimePlan>,
 ) -> Result<RuntimePlan> {
+    if let Some(selected) = selected {
+        return Ok(selected);
+    }
+    ensure!(
+        env::split_paths(host_path).all(|path| path.starts_with("/nix/store")),
+        "Nix-free execution requires a host [runtime] executables selection"
+    );
+    let mut system_links = system_links(host_path)?;
     if mode == RuntimeMode::Host {
+        let profile = Path::new("/run/current-system/sw");
+        if profile.exists() {
+            let target = profile.canonicalize()?;
+            store_root(&target).context("host system profile resolves outside /nix/store")?;
+            system_links.push((profile.to_path_buf(), target));
+        }
         return Ok(RuntimePlan {
-            store: RuntimeStore::Host,
+            read_only_paths: vec!["/nix/store".into()],
+            system_links,
             path: host_path.to_os_string(),
         });
     }
@@ -91,9 +118,8 @@ pub(crate) fn prepare_runtime(
     let mut required_executables = vec![
         find_executable("bash", host_path)?,
         find_executable("bwrap", host_path)?,
-        fs::canonicalize("/bin/sh").context("failed to resolve /bin/sh")?,
-        fs::canonicalize("/usr/bin/env").context("failed to resolve /usr/bin/env")?,
     ];
+    required_executables.extend(system_links.iter().map(|(_, target)| target.clone()));
     if git_signing {
         required_executables.push(crate::command::trusted_executable("ssh-keygen")?);
     }
@@ -128,12 +154,6 @@ pub(crate) fn prepare_runtime(
         for path in env::split_paths(&libraries) {
             add_store_root(&mut roots, &path)?;
         }
-    }
-    if Path::new("/lib64/ld-linux-x86-64.so.2").exists() {
-        add_store_root(
-            &mut roots,
-            &fs::canonicalize("/lib64/ld-linux-x86-64.so.2")?,
-        )?;
     }
     for certificate in [
         "/etc/ssl/certs/ca-bundle.crt",
@@ -176,7 +196,8 @@ pub(crate) fn prepare_runtime(
     );
     let path = env::join_paths(path_entries).context("failed to construct project runtime PATH")?;
     Ok(RuntimePlan {
-        store: RuntimeStore::Selected(store_paths),
+        read_only_paths: store_paths,
+        system_links,
         path,
     })
 }
@@ -190,24 +211,14 @@ fn add_store_root(roots: &mut HashSet<PathBuf>, path: &Path) -> Result<()> {
 
 fn query_store_closure(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
     ensure!(!roots.is_empty(), "project runtime closure has no roots");
-    let nix_store = Path::new("/run/current-system/sw/bin/nix-store");
-    let canonical_nix_store =
-        fs::canonicalize(nix_store).context("failed to resolve the system nix-store executable")?;
-    ensure!(
-        canonical_nix_store.starts_with("/nix/store"),
-        "system nix-store resolves outside /nix/store"
-    );
-    // Nix uses argv[0] to select its multicall compatibility frontend.
-    let output = Command::new(nix_store)
-        .env_clear()
-        .env("PATH", "/run/current-system/sw/bin")
-        .args(["--query", "--requisites"])
+    let output = nix_command()?
+        .args(["path-info", "--recursive"])
         .args(roots)
         .output()
         .context("failed to query project runtime closure")?;
     ensure!(
         output.status.success(),
-        "nix-store closure query failed: {}",
+        "Nix closure query failed: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
     nix::closure_paths(&output.stdout)

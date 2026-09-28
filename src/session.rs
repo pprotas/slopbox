@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -19,7 +19,9 @@ use crate::backend::native::{
     self, clone_or_copy_file, required_executor, sandbox_path, validate_workspace_contents,
 };
 use crate::backend::{self, BrokerConnections, ExecutionPlan, ProxyEndpoint, Workspace};
-use crate::command::{find_optional_executable, shell_quote};
+#[cfg(target_os = "linux")]
+use crate::command::find_optional_executable;
+use crate::command::shell_quote;
 use crate::fs_util::{expand_host_home, read_text, write_private};
 use crate::gateway::{AuthenticatedHttpRoute, GatewaySession, HttpAuthentication};
 use crate::git_config::GitUrlRewrite;
@@ -30,6 +32,8 @@ use crate::policy::{
     HarnessMode, NetworkMode, Policy, PolicyRequest, Profile, RuntimeMode, WorkspaceMode,
 };
 use crate::{DevEnvironment, ToolNetwork};
+
+mod access;
 
 static APPLY_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -57,11 +61,20 @@ struct SlopboxConfig {
     #[serde(default)]
     pi: pi::Config,
     #[serde(default)]
+    runtime: Option<backend::RuntimeSelection>,
+    default_command: Option<Vec<String>>,
+    #[serde(default)]
+    environment: BTreeMap<String, String>,
+    #[serde(default)]
     secrets: HashMap<String, SecretConfig>,
     #[serde(default)]
     http_routes: Vec<HttpRouteConfig>,
     #[serde(default)]
     git: GitConfig,
+    #[serde(default)]
+    defaults: access::Selection,
+    #[serde(default)]
+    workspaces: Vec<access::Rule>,
 }
 
 #[derive(Default, Deserialize)]
@@ -74,7 +87,8 @@ struct GitConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GitIdentityConfig {
-    workspace: PathBuf,
+    id: Option<String>,
+    workspace: Option<PathBuf>,
     name: String,
     email: String,
     signing_key_fingerprint: String,
@@ -86,19 +100,22 @@ enum SecretConfig {
     Sops { file: PathBuf, key: String },
     Environment { variable: String },
     Command { argv: Vec<String> },
+    Keychain { service: String, account: String },
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HttpRouteConfig {
     name: String,
-    workspace: PathBuf,
+    workspace: Option<PathBuf>,
     upstream: String,
     methods: Vec<String>,
     #[serde(default)]
     allow_private_addresses: bool,
     #[serde(default)]
     direct: bool,
+    #[serde(default)]
+    proxy: bool,
     authentication: HttpAuthenticationConfig,
     #[serde(default)]
     git_urls: Vec<String>,
@@ -159,6 +176,10 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     let paths = prepare_paths(options.workspace.as_deref())?;
     validate_workspace(&paths)?;
     let config = load_config(&paths.config_root)?;
+    ensure!(
+        options.launch_config.is_none() || config.runtime.is_none(),
+        "selected executable runtimes cannot replace an integrated Pi launch"
+    );
     let project_config = load_project_config(&paths.workspace)?;
     let launch_config = match options.launch_config {
         Some(config) => Some(config),
@@ -172,19 +193,46 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         launch_config.as_ref(),
     );
     policy.ensure_implemented(profile)?;
+    validate_runtime_selection(&config, policy)?;
+    crate::guest_environment::validate(&config.environment)?;
+    ensure!(
+        config.environment.is_empty() || config.runtime.is_some(),
+        "guest environment configuration requires a selected executable runtime"
+    );
+    let dev_env = if config.runtime.is_some() && matches!(options.dev_env, DevEnvironment::Auto) {
+        DevEnvironment::None
+    } else {
+        options.dev_env
+    };
+    if config.runtime.is_some() {
+        ensure!(
+            !backend::nix::enabled(&paths.workspace, dev_env)?,
+            "selected executable runtimes cannot activate a project flake; select the Nix runtime or use --dev-env none"
+        );
+    }
     let git_identity = configured_git_identity(&config, &paths.workspace)?;
     let git_rewrites = configured_git_rewrites(&config, &paths.workspace)?;
+    #[cfg(target_os = "linux")]
+    let selected_runtime = config
+        .runtime
+        .as_ref()
+        .map(|selection| native::elf::prepare(selection, &paths.workspace, git_identity.is_some()))
+        .transpose()?;
+    #[cfg(target_os = "macos")]
+    let selected_runtime = config
+        .runtime
+        .as_ref()
+        .map(|selection| native::runtime::selected::prepare(selection, &paths.workspace))
+        .transpose()?;
     #[cfg(target_os = "macos")]
     {
         native::validate(
-            config
-                .macos
-                .as_ref()
-                .context("native runtime is not configured")?,
+            config.macos.as_ref(),
+            selected_runtime.is_some(),
             &paths.workspace,
             policy,
             &options.command,
-            options.dev_env,
+            dev_env,
             options.dry_run,
         )?;
     }
@@ -247,21 +295,29 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         .context("failed to create session runtime directory")?;
     #[cfg(target_os = "macos")]
     let (private_home, tool_home) = (
-        session_dir.path().join("home"),
+        if selected_runtime.is_some() {
+            let home = paths.box_root.join("native-home");
+            native::runtime::prepare_generic_home(&home)?;
+            home
+        } else {
+            session_dir.path().join("home")
+        },
         session_dir.path().join("tool-home"),
     );
     #[cfg(target_os = "linux")]
     let (private_home, tool_home) = (paths.private_home.clone(), paths.tool_home.clone());
     #[cfg(target_os = "macos")]
     {
-        create_private_home(&private_home)?;
+        if selected_runtime.is_none() {
+            create_private_home(&private_home)?;
+        }
         create_private_home(&tool_home)?;
     }
     #[cfg(target_os = "linux")]
     let dev_environment = if options.dry_run {
         None
     } else {
-        prepare_dev_environment(session_dir.path(), &workspace_mount.source, options.dev_env)?
+        prepare_dev_environment(session_dir.path(), &workspace_mount.source, dev_env)?
     };
 
     let git_signing = if options.dry_run {
@@ -310,11 +366,8 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         (session, brokers)
     };
     #[cfg(target_os = "macos")]
-    let dev_environment = prepare_dev_environment(
-        native_session.directory(),
-        &workspace_mount.source,
-        options.dev_env,
-    )?;
+    let dev_environment =
+        prepare_dev_environment(native_session.directory(), &workspace_mount.source, dev_env)?;
     if !options.dry_run && (git_signing.is_some() || !git_rewrites.is_empty()) {
         let broker_base = brokers
             .authenticated_http
@@ -330,34 +383,50 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
             &native_session.executable(),
         )?;
     }
-    let harness = pi.prepare(&PrepareContext {
-        #[cfg(target_os = "macos")]
-        native: config.macos.as_ref(),
-        session_dir: session_dir.path(),
-        private_home: &paths.private_home,
-        host_path: &host_path,
-        profile,
-        general_network,
-        tool_network: network.tool,
-        model_providers: if network.model {
-            gateway
-                .as_ref()
-                .map(GatewaySession::providers)
-                .unwrap_or_default()
-        } else {
-            &[]
-        },
-        dry_run: options.dry_run,
-    })?;
+    #[cfg(target_os = "macos")]
+    let generic = config.runtime.is_some();
+    #[cfg(target_os = "linux")]
+    let generic = false;
+    let harness = if generic {
+        crate::harness::PreparedHarness::default()
+    } else {
+        pi.prepare(&PrepareContext {
+            #[cfg(target_os = "macos")]
+            native: config.macos.as_ref(),
+            session_dir: session_dir.path(),
+            private_home: &paths.private_home,
+            host_path: if config.runtime.is_some() {
+                OsStr::new("")
+            } else {
+                &host_path
+            },
+            profile,
+            general_network,
+            tool_network: network.tool,
+            model_providers: if network.model {
+                gateway
+                    .as_ref()
+                    .map(GatewaySession::providers)
+                    .unwrap_or_default()
+            } else {
+                &[]
+            },
+            dry_run: options.dry_run,
+        })?
+    };
     let runtime = prepare_runtime(
         policy.runtime,
         &host_path,
         dev_environment.as_ref(),
+        #[cfg(target_os = "linux")]
         harness.executable.as_deref(),
+        #[cfg(target_os = "linux")]
         git_signing.is_some(),
+        #[cfg(target_os = "linux")]
         options.dry_run,
         #[cfg(target_os = "macos")]
         &paths.workspace,
+        selected_runtime,
     )?;
     let mut clipboard = if cfg!(target_os = "linux")
         && private_terminal
@@ -366,12 +435,24 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     {
         Some(crate::clipboard::Clipboard::new(
             session_dir.path().join("clipboard"),
-            find_optional_executable("wl-paste", &host_path),
+            crate::command::trusted_executable(
+                "wl-paste",
+                #[cfg(target_os = "macos")]
+                &paths.workspace,
+            )
+            .ok(),
         )?)
     } else {
         None
     };
     let mut environment = broker_environment(&brokers);
+    if let Some(ca) = gateway.as_ref().and_then(GatewaySession::account_ca) {
+        let path = session_dir.path().join("account-ca.pem");
+        write_private(&path, ca)?;
+        #[cfg(target_os = "linux")]
+        let path = PathBuf::from("/run/slopbox/account-ca.pem");
+        environment.push(("SLOPBOX_ACCOUNT_CA".into(), path.into_os_string()));
+    }
     if direct_accounts {
         let endpoint = brokers
             .authenticated_http
@@ -384,6 +465,50 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
             PathBuf::from("/run/slopbox/github")
         };
         environment.push(("SLOPBOX_GITHUB_CONFIG".into(), directory.into_os_string()));
+    }
+    if !config.environment.is_empty() {
+        let mut context: BTreeMap<String, String> = environment
+            .iter()
+            .map(|(name, value)| {
+                Ok((
+                    name.to_str()
+                        .context("guest environment name is not UTF-8")?
+                        .to_owned(),
+                    value
+                        .to_str()
+                        .context("guest environment value is not UTF-8")?
+                        .to_owned(),
+                ))
+            })
+            .collect::<Result<_>>()?;
+        #[cfg(target_os = "macos")]
+        {
+            context.insert(
+                "HOME".into(),
+                private_home
+                    .to_str()
+                    .context("private home is not UTF-8")?
+                    .to_owned(),
+            );
+            context.insert(
+                "TMPDIR".into(),
+                session_dir
+                    .path()
+                    .join("tmp")
+                    .to_str()
+                    .context("temporary path is not UTF-8")?
+                    .to_owned(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            context.insert("HOME".into(), "/home/slopbox".into());
+            context.insert("TMPDIR".into(), "/tmp".into());
+        }
+        environment.extend(crate::guest_environment::resolve(
+            &config.environment,
+            &context,
+        )?);
     }
     let plan = ExecutionPlan {
         session_dir: session_dir.path(),
@@ -444,7 +569,8 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn macos_config() -> Result<Option<native::Config>> {
+pub(crate) fn macos_config() -> Result<(Option<native::Config>, Option<backend::RuntimeSelection>)>
+{
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")?;
@@ -452,7 +578,8 @@ pub(crate) fn macos_config() -> Result<Option<native::Config>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config"))
         .join("slopbox");
-    Ok(load_config(&root)?.macos)
+    let config = load_config(&root)?;
+    Ok((config.macos, config.runtime))
 }
 
 fn prepare_paths(workspace: Option<&Path>) -> Result<Paths> {
@@ -550,7 +677,10 @@ pub fn doctor(
             "Host config {}",
             paths.config_root.join("config.toml").display()
         ),
-        if launch.is_some() {
+        if config.runtime.is_some() {
+            "Setup: not needed for run/default_command; existing saved policy ceilings still apply"
+                .into()
+        } else if launch.is_some() {
             "Setup: saved host-side policy applies".into()
         } else {
             "Setup: not initialized; run slopbox in a host terminal or use slopbox init".into()
@@ -561,6 +691,7 @@ pub fn doctor(
             "Policy",
             policy
                 .ensure_implemented(profile)
+                .and_then(|()| validate_runtime_selection(&config, policy))
                 .map(|()| format!("{profile}; effective policy supported")),
         ),
         (
@@ -610,7 +741,13 @@ pub fn doctor(
             }),
         ),
     ];
-    native::diagnostics::check(&paths.workspace, policy, &mut checks, &mut lines);
+    native::diagnostics::check(
+        &paths.workspace,
+        policy,
+        &mut checks,
+        &mut lines,
+        config.runtime.as_ref(),
+    );
     let mut failures = 0;
     for (name, result) in checks {
         match result {
@@ -654,6 +791,20 @@ fn check_model_configuration(paths: &Paths, policy: Policy) -> Result<String> {
     ))
 }
 
+fn validate_runtime_selection(config: &SlopboxConfig, policy: Policy) -> Result<()> {
+    if config.runtime.is_some() {
+        ensure!(
+            policy.runtime == RuntimeMode::Host,
+            "selected executable runtimes require runtime=host; no fallback from a project or image runtime"
+        );
+        ensure!(
+            policy.harness == HarnessMode::None,
+            "selected executable runtimes require harness=none; integrated Pi separation is not enabled implicitly"
+        );
+    }
+    Ok(())
+}
+
 fn describe_status(
     paths: &Paths,
     config: &SlopboxConfig,
@@ -672,10 +823,18 @@ fn describe_status(
     let rewrites = configured_git_rewrites(config, &paths.workspace)?;
     let mut lines = vec![
         format!("Project       {}", paths.workspace.display()),
-        "Agent         Pi".into(),
+        if config.runtime.is_some() {
+            "Execution     Generic commands; no automatic harness/tool separation".into()
+        } else {
+            "Agent         Pi".into()
+        },
         format!(
             "Default env   {}",
-            native::diagnostics::environment_description(&paths.workspace)
+            if config.runtime.is_some() {
+                "Selected host runtime; no automatic project activation"
+            } else {
+                native::diagnostics::environment_description(&paths.workspace)
+            }
         ),
         format!(
             "Changes       {}",
@@ -688,7 +847,11 @@ fn describe_status(
         ),
         format!(
             "Host tools    {}",
-            native::diagnostics::runtime_description(policy.runtime)
+            if config.runtime.is_some() {
+                "Selected executables, resources and platform base; read-only"
+            } else {
+                native::diagnostics::runtime_description(policy.runtime)
+            }
         ),
         format!(
             "Internet      {}",
@@ -702,13 +865,36 @@ fn describe_status(
         ),
         format!(
             "Tool internet {}",
-            if policy.network == NetworkMode::None || tool_network == ToolNetwork::None {
+            if config.runtime.is_some() {
+                "No automatic separation; subprocesses inherit outer access"
+            } else if policy.network == NetworkMode::None || tool_network == ToolNetwork::None {
                 "General egress disabled; configured account routes remain available"
             } else {
                 "Pi shell tools can use approved destinations and configured account routes"
             }
         ),
     ];
+    if let Some(command) = &config.default_command {
+        lines.push(format!(
+            "Default       {} ({} additional arguments)",
+            crate::launch::terminal_text(
+                command.first().map(String::as_str).unwrap_or("[invalid]")
+            ),
+            command.len().saturating_sub(1)
+        ));
+    }
+    crate::guest_environment::validate(&config.environment)?;
+    if !config.environment.is_empty() {
+        lines.push(format!(
+            "Environment   {} (host configuration; values not displayed)",
+            config
+                .environment
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     if policy.credentials == crate::policy::CredentialMode::Brokered {
         let providers = crate::provider::configured_names(&paths.state_root);
         lines.push(format!(
@@ -726,6 +912,12 @@ fn describe_status(
         lines.push("Accounts      No authenticated routes".into());
     } else {
         for route in routes {
+            if route.proxy {
+                lines.push(format!(
+                    "Account TLS   {}: opt-in mediation; explicit proxy and session trust required",
+                    route.name
+                ));
+            }
             lines.push(format!(
                 "Account route {}: {} {}{}; available to agent and commands",
                 route.name,
@@ -814,7 +1006,8 @@ fn describe_status(
     ));
     let supported = policy
         .ensure_implemented(profile)
-        .and_then(|()| backend::ensure_supported());
+        .and_then(|()| backend::ensure_supported())
+        .and_then(|()| validate_runtime_selection(config, policy));
     #[cfg(target_os = "macos")]
     let supported = supported
         .and_then(|()| native::validate_policy(policy))
@@ -828,6 +1021,38 @@ fn describe_status(
             .into(),
     );
     if verbose {
+        let (_, rules) = access::select(
+            &config.defaults,
+            &config.workspaces,
+            &home,
+            &paths.workspace,
+        )?;
+        lines.push(format!("workspace-rules: {rules:?} (broadest first)"));
+        for (setting, default, rule) in [
+            (
+                "git_identity",
+                config.defaults.git_identity.is_some(),
+                rules
+                    .iter()
+                    .rev()
+                    .find(|&&index| config.workspaces[index].git_identity.is_some()),
+            ),
+            (
+                "accounts",
+                config.defaults.accounts.is_some(),
+                rules
+                    .iter()
+                    .rev()
+                    .find(|&&index| config.workspaces[index].accounts.is_some()),
+            ),
+        ] {
+            let source = match rule {
+                Some(index) => format!("host workspaces[{index}]"),
+                None if default => "host defaults".into(),
+                None => "legacy exact-workspace bindings".into(),
+            };
+            lines.push(format!("{setting}-source: {source}"));
+        }
         lines.push(String::new());
         lines.extend([
             format!("profile: {profile}"),
@@ -848,6 +1073,27 @@ fn describe_status(
                 crate::launch::config_path(&paths.config_root, &paths.workspace).display()
             ),
         ]);
+        if let Some(runtime) = &config.runtime {
+            lines.push("runtime-source: host runtime.executables".into());
+            lines.push(
+                "runtime-infrastructure: slopbox, bash, bwrap, env; ssh-keygen when signing".into(),
+            );
+            for executable in &runtime.executables {
+                lines.push(format!("runtime-executable: {}", executable.display()));
+            }
+            for root in &runtime.dependency_roots {
+                lines.push(format!(
+                    "runtime-dependency-root: {} (discovered files only)",
+                    root.display()
+                ));
+            }
+            for bundle in &runtime.bundles {
+                lines.push(format!(
+                    "runtime-bundle: {} (whole tree, read-only code and data)",
+                    bundle.display()
+                ));
+            }
+        }
         for (source, target) in resources.mounts {
             lines.push(format!(
                 "read-only-mount: {} -> {}",
@@ -887,6 +1133,10 @@ pub fn init_project(
     validate_workspace(&paths)?;
     let config = load_config(&paths.config_root)?;
     let project = load_project_config(&paths.workspace)?;
+    ensure!(
+        config.runtime.is_none(),
+        "selected executable runtimes do not provide Pi project setup; use slopbox run -- COMMAND"
+    );
     let previous = crate::launch::load(&paths.config_root, &paths.workspace)?;
     let (profile, mut policy) = select_policy(&config, &project, None, no_host_pi_resources, None);
     policy.ensure_implemented(profile)?;
@@ -950,6 +1200,34 @@ pub fn launch(agent_arguments: Vec<OsString>, approval_view: bool) -> Result<Exi
     backend::ensure_supported()?;
     let paths = prepare_paths(None)?;
     validate_workspace(&paths)?;
+    let config = load_config(&paths.config_root)?;
+    if let Some(command) = config.default_command {
+        ensure!(
+            !command.is_empty()
+                && !command[0].is_empty()
+                && command.iter().all(|argument| !argument.contains('\0')),
+            "default_command must contain a command and valid literal arguments"
+        );
+        return run(RunOptions {
+            workspace: Some(paths.workspace),
+            profile: None,
+            dev_env: DevEnvironment::Auto,
+            tool_network: ToolNetwork::General,
+            no_host_pi_resources: false,
+            command: command
+                .into_iter()
+                .map(OsString::from)
+                .chain(agent_arguments)
+                .collect(),
+            dry_run: false,
+            approval_view,
+            launch_config: None,
+        });
+    }
+    ensure!(
+        config.runtime.is_none(),
+        "no default_command configured; use slopbox run -- COMMAND or set a host default_command"
+    );
     let (launch, initialized) = match crate::launch::load(&paths.config_root, &paths.workspace)? {
         Some(config) => (config, false),
         None => (
@@ -1028,23 +1306,33 @@ fn configured_git_identity(
     workspace: &Path,
 ) -> Result<Option<GitSigningIdentity>> {
     let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
+    let (selection, _) = access::select(&config.defaults, &config.workspaces, &home, workspace)?;
+    if matches!(
+        selection.git_identity,
+        Some(access::Identity::Disabled(false))
+    ) {
+        return Ok(None);
+    }
     let mut matching = Vec::new();
     for identity in &config.git.identities {
-        let configured_workspace = expand_host_home(&identity.workspace, &home)?;
-        let configured_workspace = fs::canonicalize(&configured_workspace).with_context(|| {
-            format!(
-                "failed to resolve Git identity workspace {}",
-                configured_workspace.display()
-            )
-        })?;
-        if configured_workspace == workspace {
-            matching.push(GitSigningIdentity {
-                name: identity.name.clone(),
-                email: identity.email.clone(),
-                fingerprint: identity.signing_key_fingerprint.clone(),
-            });
+        let selected = match &selection.git_identity {
+            Some(access::Identity::Named(id)) => identity.id.as_ref() == Some(id),
+            None => identity.workspace.is_some(),
+            Some(access::Identity::Disabled(_)) => unreachable!(),
+        };
+        if !selected || !matches_workspace(identity.workspace.as_deref(), &home, workspace)? {
+            continue;
         }
+        matching.push(GitSigningIdentity {
+            name: identity.name.clone(),
+            email: identity.email.clone(),
+            fingerprint: identity.signing_key_fingerprint.clone(),
+        });
     }
+    ensure!(
+        selection.git_identity.is_none() || !matching.is_empty(),
+        "selected Git identity is unknown or outside its workspace binding"
+    );
     ensure!(
         matching.len() <= 1,
         "multiple Git identities are configured for {}",
@@ -1829,23 +2117,28 @@ fn load_config(config_root: &Path) -> Result<SlopboxConfig> {
         .with_context(|| format!("invalid Slopbox configuration {}", path.display()))
 }
 
+fn matches_workspace(binding: Option<&Path>, home: &Path, workspace: &Path) -> Result<bool> {
+    match binding {
+        Some(path) => Ok(canonicalize_allow_missing(&expand_host_home(path, home)?)? == workspace),
+        None => Ok(true),
+    }
+}
+
 fn workspace_http_routes<'a>(
     config: &'a SlopboxConfig,
     workspace: &Path,
 ) -> Result<Vec<&'a HttpRouteConfig>> {
     let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
+    let (selection, _) = access::select(&config.defaults, &config.workspaces, &home, workspace)?;
     let mut routes = Vec::new();
     let mut names = HashSet::new();
     let mut direct: Vec<url::Url> = Vec::new();
     for route in &config.http_routes {
-        let configured_workspace = expand_host_home(&route.workspace, &home)?;
-        let configured_workspace = fs::canonicalize(&configured_workspace).with_context(|| {
-            format!(
-                "failed to resolve authenticated HTTP workspace {}",
-                configured_workspace.display()
-            )
-        })?;
-        if configured_workspace != workspace {
+        let selected = match &selection.accounts {
+            Some(accounts) => accounts.contains(&route.name),
+            None => route.workspace.is_some(),
+        };
+        if !selected || !matches_workspace(route.workspace.as_deref(), &home, workspace)? {
             continue;
         }
         ensure!(
@@ -1855,7 +2148,7 @@ fn workspace_http_routes<'a>(
         );
         let upstream =
             crate::gateway::validate_http_route(&route.name, &route.upstream, &route.methods)?;
-        if route.direct {
+        if route.direct || route.proxy {
             for other in &direct {
                 let left = upstream.path().trim_end_matches('/');
                 let right = other.path().trim_end_matches('/');
@@ -1875,6 +2168,12 @@ fn workspace_http_routes<'a>(
             direct.push(upstream);
         }
         routes.push(route);
+    }
+    if let Some(accounts) = &selection.accounts {
+        ensure!(
+            accounts.iter().all(|name| names.contains(name)),
+            "selected account is unknown or outside its workspace binding"
+        );
     }
     Ok(routes)
 }
@@ -1920,6 +2219,9 @@ fn configured_http_routes(
                 SecretConfig::Environment { variable } => {
                     crate::secret::from_environment(variable)?
                 }
+                SecretConfig::Keychain { service, account } => {
+                    crate::secret::from_keychain(service, account)?
+                }
                 SecretConfig::Command { argv } => crate::secret::from_command(
                     argv,
                     #[cfg(target_os = "macos")]
@@ -1939,14 +2241,17 @@ fn configured_http_routes(
             ("token", None) => HttpAuthentication::Token { secret },
             _ => unreachable!(),
         };
-        routes.push(AuthenticatedHttpRoute::new(
-            route.name.clone(),
-            route.upstream.clone(),
-            route.methods.clone(),
-            authentication,
-            route.allow_private_addresses,
-            route.direct,
-        )?);
+        routes.push(
+            AuthenticatedHttpRoute::new(
+                route.name.clone(),
+                route.upstream.clone(),
+                route.methods.clone(),
+                authentication,
+                route.allow_private_addresses,
+                route.direct,
+            )?
+            .with_proxy(route.proxy),
+        );
     }
     Ok(routes)
 }
@@ -2052,6 +2357,113 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_access_defaults_apply_to_new_workspaces_without_resolving_secrets() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let config: SlopboxConfig = toml::from_str(
+            r#"
+[defaults]
+git_identity = "agent"
+accounts = ["forge"]
+[[git.identities]]
+id = "agent"
+name = "Agent"
+email = "agent@example.test"
+signing_key_fingerprint = "SHA256:fixture"
+[[http_routes]]
+name = "forge"
+upstream = "https://forge.example.test/api"
+methods = ["GET", "POST"]
+authentication = { type = "bearer", secret = "unavailable" }
+[secrets.unavailable]
+source = "command"
+argv = ["must-not-execute"]
+"#,
+        )
+        .unwrap();
+        for workspace in [&first, &second] {
+            let workspace = workspace.canonicalize().unwrap();
+            assert_eq!(
+                configured_git_identity(&config, &workspace)
+                    .unwrap()
+                    .unwrap()
+                    .email,
+                "agent@example.test"
+            );
+            let routes = workspace_http_routes(&config, &workspace).unwrap();
+            assert_eq!(routes.len(), 1);
+            assert_eq!(routes[0].name, "forge");
+            assert!(!workspace.join(".slopbox.toml").exists());
+        }
+        let mut dormant = config;
+        dormant.defaults = access::Selection::default();
+        assert!(configured_git_identity(&dormant, &first).unwrap().is_none());
+        assert!(workspace_http_routes(&dormant, &first).unwrap().is_empty());
+    }
+
+    #[test]
+    fn workspace_rules_can_remove_default_identity_and_account_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let config: SlopboxConfig = toml::from_str(&format!(
+            r#"
+[defaults]
+git_identity = "unavailable"
+accounts = ["unavailable"]
+[[workspaces]]
+paths = ["{}"]
+git_identity = false
+accounts = []
+"#,
+            workspace.display()
+        ))
+        .unwrap();
+        assert!(
+            configured_git_identity(&config, &workspace)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            workspace_http_routes(&config, &workspace)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(configured_git_identity(&config, workspace.parent().unwrap()).is_err());
+        assert!(workspace_http_routes(&config, workspace.parent().unwrap()).is_err());
+        for text in [
+            "[defaults]\naccounts = ['forge']",
+            "[[workspaces]]\npaths = ['/']\naccounts = ['forge']",
+        ] {
+            assert!(toml::from_str::<ProjectConfig>(text).is_err());
+        }
+    }
+
+    #[test]
+    fn global_selection_cannot_expand_an_existing_workspace_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let config: SlopboxConfig = toml::from_str(&format!(
+            r#"
+[defaults]
+accounts = ["scoped"]
+[[http_routes]]
+name = "scoped"
+workspace = "{}"
+upstream = "https://forge.example.test/repo"
+methods = ["GET"]
+authentication = {{ type = "bearer", secret = "missing" }}
+"#,
+            workspace.display()
+        ))
+        .unwrap();
+        assert_eq!(workspace_http_routes(&config, &workspace).unwrap().len(), 1);
+        assert!(workspace_http_routes(&config, workspace.parent().unwrap()).is_err());
+    }
+
+    #[test]
     fn overlapping_direct_accounts_fail_before_secret_resolution() {
         let workspace = tempfile::tempdir().unwrap();
         let workspace = workspace.path().canonicalize().unwrap();
@@ -2093,7 +2505,10 @@ authentication = {{ type = "bearer", secret = "github" }}
         let identity = &config.git.identities[0];
         assert_eq!(identity.name, "agent");
         assert_eq!(identity.email, "agent@example.com");
-        assert_eq!(identity.workspace, Path::new("~/Projects/example"));
+        assert_eq!(
+            identity.workspace.as_deref(),
+            Some(Path::new("~/Projects/example"))
+        );
         assert_eq!(config.http_routes.len(), 2);
         assert!(!config.http_routes[0].direct);
         assert!(config.http_routes[1].direct);
