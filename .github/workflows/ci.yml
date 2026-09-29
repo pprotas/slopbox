@@ -1,7 +1,11 @@
 name: CI
 
-# Run private-repository CI only when explicitly dispatched.
 on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

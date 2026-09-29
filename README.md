@@ -45,6 +45,6 @@ nixfmt --check flake.nix tests/nixos.nix
 nix build
 ```
 
-On Nix-backed Linux, `nix run .#e2e` tests native containment with synthetic credentials and no model charges. `tests/linux-nixless.py` and `tests/linux-bundles.py` exercise a host without Nix. Native macOS integration fixtures are opt-in and require explicit paths to a built Slopbox binary and reviewed tools. CI runs only on manual dispatch while the repository is private.
+On Nix-backed Linux, `nix run .#e2e` tests native containment with synthetic credentials and no model charges. `tests/linux-nixless.py` and `tests/linux-bundles.py` exercise a host without Nix. Native macOS integration fixtures are opt-in and require explicit paths to a built Slopbox binary and reviewed tools. CI runs on `main` pushes, release tags, pull requests targeting `main`, and manual dispatch.
 
 The software is experimental and licensed under [MIT](LICENSE). Historical POC documents record earlier behavior, including a now-removed embedded Pi integration; they are not current feature claims. The [project direction](docs/direction.md) and [security model](SECURITY-MODEL.md) take precedence.
