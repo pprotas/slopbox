@@ -1,6 +1,6 @@
 # macOS Seatbelt spike
 
-> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+> Historical design/validation record. Built-in Pi launch and the standalone `tests/macos-seatbelt/` probe have been removed; the probe remains in Git history. Commands below are not current checks. Use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
 
 Recorded 2026-09-20 on `feat/macos-seatbelt-spike`, branched from freshly fetched `origin/main` at `56e3cfa`. The three refactor checkpoints in [macos-handoff.md](macos-handoff.md) are merged.
 

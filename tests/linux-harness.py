@@ -202,7 +202,7 @@ for path in [{str(config)!r}, {str(home / ".ssh/key")!r}, {str(root / "ca.key")!
     assert not Path(path).exists(), path
 assert not os.environ.get('FIXTURE_ACCOUNT_TOKEN')
 assert not os.environ.get('SSH_AUTH_SOCK')
-assert os.environ.get('OPENROUTER_API_KEY') == (None if inner else 'slopbox:openrouter')
+assert os.environ.get('OPENROUTER_API_KEY') is None
 assert Path('/run/slopbox-host/model/gateway.sock').exists() == (not inner)
 with socket.socket(socket.AF_UNIX) as model:
     try: model.connect('/run/slopbox-host/model/gateway.sock')
@@ -268,6 +268,8 @@ Path('inner-passed' if inner else 'outer-passed').write_text('passed')
             assert (
                 workspace / "answer.txt"
             ).read_text() == "bundle-harness-passed\n", output
+            assert (workspace / "outer-passed").is_file(), output
+            assert (workspace / "inner-passed").is_file(), output
             assert (workspace / "outer-passed").read_text() == "passed", output
             assert (workspace / "inner-passed").read_text() == "passed", output
             assert not (workspace / ".slopbox.toml").exists()

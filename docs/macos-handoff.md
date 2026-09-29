@@ -1,6 +1,6 @@
 # Native macOS session handoff
 
-> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+> Historical design/validation record. Built-in Pi launch and the standalone `tests/macos-seatbelt/` probe have been removed; the probe remains in Git history. Commands below are not current checks. Use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
 
 ## GitHub cutover checkpoint — 2026-09-26, before publication
 

@@ -409,7 +409,7 @@ for path in [{str(config)!r}, {str(home / ".ssh/key")!r}, {str(home / ".claude/.
     assert not Path(path).exists(), path
 assert not os.environ.get('FIXTURE_ACCOUNT_TOKEN')
 assert not os.environ.get('SSH_AUTH_SOCK')
-assert os.environ.get('OPENROUTER_API_KEY') == (None if inner else 'slopbox:openrouter')
+assert os.environ.get('OPENROUTER_API_KEY') is None
 assert os.environ.get('ANTHROPIC_AUTH_TOKEN') in (None, 'slopbox:fixture')
 with socket.socket(socket.AF_UNIX) as model:
     try: model.connect('/run/slopbox-host/model/gateway.sock')
@@ -520,13 +520,15 @@ print('probe-complete')
             assert (
                 workspace / "answer.txt"
             ).read_text() == "claude-harness-passed\n", output
+            assert (workspace / "outer-passed").is_file(), output
             assert (workspace / "outer-passed").read_text() == "passed", output
             if not native:
+                assert (workspace / "inner-passed").is_file(), output
                 assert (workspace / "inner-passed").read_text() == "passed", output
             assert not (workspace / ".slopbox.toml").exists()
         assert len(requests) == 10, len(requests)
         print(
-            "PASS: native Claude Code 2.1.283 streamed, read, edited and ran Bash in two workspaces"
+            "PASS: Claude Code streamed, read, edited and ran Bash in two workspaces"
         )
         print(
             "PASS: verified HTTPS account mediation, credential containment and direct-network denial"

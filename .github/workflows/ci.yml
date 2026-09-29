@@ -33,7 +33,6 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - run: nix develop --command cargo fmt --check
-      - run: nix develop --command cargo fmt --manifest-path tests/macos-seatbelt/Cargo.toml --check
       - run: nix develop --command nixfmt --check flake.nix tests/nixos.nix
       - run: nix develop --command cargo test --locked
       - run: nix develop --command cargo test --locked gateway::tls -- --include-ignored
@@ -43,8 +42,6 @@ jobs:
           SLOPBOX_TEST_GH="$gh_path" nix develop --command cargo test --locked \
             github::tests::gh_reads_generated_config_without_migration -- --exact --ignored
       - run: nix develop --command cargo clippy --locked --all-targets -- -D warnings
-      - if: runner.os == 'macOS'
-        run: nix develop --command cargo clippy --manifest-path tests/macos-seatbelt/Cargo.toml --locked --all-targets -- -D warnings
       - run: nix build -L
       - run: nix flake check --no-build --all-systems
 
