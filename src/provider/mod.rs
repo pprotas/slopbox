@@ -58,17 +58,6 @@ impl Providers {
         })
     }
 
-    pub fn available(&self) -> Vec<Kind> {
-        let mut providers = Vec::new();
-        if self.openrouter.is_some() {
-            providers.push(Kind::OpenRouter);
-        }
-        if self.codex.is_some() {
-            providers.push(Kind::OpenAiCodex);
-        }
-        providers
-    }
-
     pub fn handle(&self, mut client: UnixStream) -> Result<()> {
         client.set_read_timeout(Some(Duration::from_secs(30)))?;
         let request = read_request_header(&mut client)?;
@@ -118,7 +107,6 @@ mod tests {
     #[test]
     fn model_routes_require_exact_paths_and_post_without_using_credentials() {
         let providers = Providers::default();
-        assert!(providers.available().is_empty());
         for (method, target, status) in [
             (
                 "POST",

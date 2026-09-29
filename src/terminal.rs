@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, ensure};
 
 use crate::approval::{self, View};
-use crate::clipboard::{Capture, Clipboard};
 
 const QUEUE_LIMIT: usize = 64 * 1024;
 // End pending controls, links, and image placements before drawing host prompts.
@@ -383,12 +382,11 @@ fn resize(master: &File, size: &libc::winsize) -> Result<()> {
 pub fn run(
     command: &mut Command,
     approval_view: bool,
-    mut clipboard: Option<&mut Clipboard>,
     context: approval::Context<'_>,
 ) -> Result<ExitStatus> {
     let _signals = Signals::install()?;
     let mut terminal = Terminal::open()?;
-    // Broker diagnostics must not corrupt Pi's display or the host approval view.
+    // Broker diagnostics must not corrupt the guest display or the host approval view.
     terminal.diagnostics = Some(Diagnostics::capture()?);
     let mut size = terminal.size()?;
     // Drop the PTY master before waiting: Darwin exit can block on undrained output.
@@ -425,26 +423,19 @@ pub fn run(
     let mut to_guest = VecDeque::new();
     let mut hotkey = Hotkey {
         approvals: approval_view,
-        clipboard: clipboard.is_some(),
         ..Hotkey::default()
     };
     let mut exited = None;
     let mut eof = false;
     let mut redraw_at = None;
-    let mut capture: Option<(Capture, usize)> = None;
-    let mut clipboard_notice: Option<String> = None;
     loop {
         let signal = INTERRUPTED.swap(0, Ordering::Relaxed);
         if signal == libc::SIGTSTP {
-            capture = None;
             to_guest.clear();
             suspend(&process, &terminal)?;
             resize(&master, &size)?;
             if let Some(view) = &view {
                 draw(&mut to_host, view, &context, &size, &line);
-            }
-            if let Some(message) = &clipboard_notice {
-                draw_clipboard_notice(&mut to_host, message);
             }
             continue;
         }
@@ -455,9 +446,8 @@ pub fn run(
             && let Some(status) = process.0.try_wait()?
         {
             exited = Some((status, Instant::now()));
-            capture = None;
             to_guest.clear();
-            if view.take().is_some() || clipboard_notice.take().is_some() {
+            if view.take().is_some() {
                 to_host.clear();
                 terminal.leave()?;
             }
@@ -478,46 +468,15 @@ pub fn run(
             if let Some(view) = &view {
                 draw(&mut to_host, view, &context, &size, &line);
             }
-            if let Some(message) = &clipboard_notice {
-                draw_clipboard_notice(&mut to_host, message);
-            }
         }
         if redraw_at.is_some_and(|at| Instant::now() >= at) {
             resize(&master, &size)?;
             redraw_at = None;
         }
-        if view.is_none()
-            && clipboard_notice.is_none()
-            && hotkey.expire(&mut to_guest)
-            && let Some((_, offset)) = capture.take()
-        {
-            to_guest.truncate(offset);
-            to_guest.push_back(0x1b);
+        if view.is_none() {
+            hotkey.expire(&mut to_guest);
         }
-        if let Some((job, offset)) = &mut capture {
-            match clipboard.as_mut().expect("clipboard enabled").poll(job) {
-                Ok(Some(path)) => {
-                    let later_input = to_guest.split_off(*offset);
-                    to_guest.extend(format!("\x1b[200~ {path} \x1b[201~").bytes());
-                    to_guest.extend(later_input);
-                    capture = None;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    capture = None;
-                    clipboard_notice = Some(format!("{error:#}"));
-                }
-            }
-        }
-        if let Some(message) = &clipboard_notice
-            && !terminal.in_view
-        {
-            terminal.flush_input()?;
-            to_guest.clear();
-            terminal.enter()?;
-            draw_clipboard_notice(&mut to_host, message);
-        }
-        let in_host_view = view.is_some() || clipboard_notice.is_some();
+        let in_host_view = view.is_some();
         let mut poll = [
             libc::pollfd {
                 fd: terminal.file.as_raw_fd(),
@@ -541,7 +500,7 @@ pub fn run(
                     libc::POLLIN
                 } else {
                     0
-                }) | if to_guest.is_empty() || capture.is_some() {
+                }) | if to_guest.is_empty() {
                     0
                 } else {
                     libc::POLLOUT
@@ -555,11 +514,6 @@ pub fn run(
                     .expect("diagnostics installed")
                     .reader
                     .as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: capture.as_ref().map_or(-1, |(job, _)| job.descriptor()),
                 events: libc::POLLIN,
                 revents: 0,
             },
@@ -593,22 +547,6 @@ pub fn run(
                 }
                 Err(e) => return Err(e.into()),
             };
-            if clipboard_notice.is_some() {
-                if bytes[..count]
-                    .iter()
-                    .any(|byte| matches!(byte, b'\r' | b'\n' | 0x1b))
-                {
-                    clipboard_notice = None;
-                    to_host.clear();
-                    terminal.flush_input()?;
-                    terminal.leave()?;
-                    let mut narrow = size;
-                    narrow.ws_col = size.ws_col.saturating_sub(1).max(1);
-                    resize(&master, &narrow)?;
-                    redraw_at = Some(Instant::now() + Duration::from_millis(200));
-                }
-                continue;
-            }
             if let Some(panel) = &mut view {
                 let mut transition = false;
                 for byte in &bytes[..count] {
@@ -663,28 +601,7 @@ pub fn run(
                         continue;
                     };
                     match shortcut {
-                        Shortcut::Clipboard => {
-                            if capture.is_none() {
-                                match clipboard.as_ref().expect("clipboard enabled").start() {
-                                    Ok(job) => capture = Some((job, to_guest.len())),
-                                    Err(error) => {
-                                        clipboard_notice = Some(format!("{error:#}"));
-                                        to_host.clear();
-                                        break;
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        Shortcut::Cancel => {
-                            if let Some((_, offset)) = capture.take() {
-                                to_guest.truncate(offset);
-                            }
-                            to_guest.push_back(0x03);
-                            continue;
-                        }
                         Shortcut::Suspend => {
-                            capture = None;
                             to_guest.clear();
                             INTERRUPTED.store(libc::SIGTSTP, Ordering::Relaxed);
                             break;
@@ -692,7 +609,6 @@ pub fn run(
                         Shortcut::Approvals => {}
                     }
                     {
-                        capture = None;
                         terminal.flush_input()?;
                         to_guest.clear();
                         line.clear();
@@ -714,12 +630,11 @@ pub fn run(
                 }
             }
         }
-        if capture.is_none() && clipboard_notice.is_none() && poll[1].revents & libc::POLLOUT != 0 {
+        if poll[1].revents & libc::POLLOUT != 0 {
             flush(&mut master, &mut to_guest)
                 .context("failed to send input to the sandbox terminal")?;
         }
         if view.is_none()
-            && clipboard_notice.is_none()
             && !eof
             && poll[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0
         {
@@ -775,18 +690,6 @@ fn draw(
     queue.extend(line);
 }
 
-fn draw_clipboard_notice(queue: &mut VecDeque<u8>, message: &str) {
-    queue.clear();
-    queue.extend(CLEAR);
-    queue.extend(
-        format!(
-            "SLOPBOX CLIPBOARD\r\n\r\n{}\r\n\r\nPress Enter or Escape to return to Pi.\r\n",
-            crate::launch::terminal_text(message)
-        )
-        .bytes(),
-    );
-}
-
 fn flush(file: &mut File, queue: &mut VecDeque<u8>) -> Result<()> {
     if !queue.is_empty() {
         match file.write(queue.as_slices().0) {
@@ -814,14 +717,11 @@ fn check(result: libc::c_int) -> io::Result<libc::c_int> {
 enum Shortcut {
     Approvals,
     Suspend,
-    Clipboard,
-    Cancel,
 }
 
 #[derive(Default)]
 struct Hotkey {
     approvals: bool,
-    clipboard: bool,
     paste: bool,
     paste_end: usize,
     control_string: bool,
@@ -854,14 +754,6 @@ impl Hotkey {
             (b"\x1b[122;5u", Shortcut::Suspend),
             (b"\x1b[122;5:1u", Shortcut::Suspend),
             (b"\x1b[27;5;122~", Shortcut::Suspend),
-            (b"\x16", Shortcut::Clipboard),
-            (b"\x1b[118;5u", Shortcut::Clipboard),
-            (b"\x1b[118;5:1u", Shortcut::Clipboard),
-            (b"\x1b[27;5;118~", Shortcut::Clipboard),
-            (b"\x03", Shortcut::Cancel),
-            (b"\x1b[99;5u", Shortcut::Cancel),
-            (b"\x1b[99;5:1u", Shortcut::Cancel),
-            (b"\x1b[27;5;99~", Shortcut::Cancel),
         ];
         const LITERALS: &[&[u8]] = &[b"\x1b[200~", b"\x1b]", b"\x1bP", b"\x1b_", b"\x1b^"];
         if self.paste {
@@ -900,10 +792,7 @@ impl Hotkey {
             if let Some((_, shortcut)) =
                 KEYS.iter().find(|(key, _)| *key == self.pending.as_slice())
             {
-                if (*shortcut == Shortcut::Approvals && !self.approvals)
-                    || (matches!(shortcut, Shortcut::Clipboard | Shortcut::Cancel)
-                        && !self.clipboard)
-                {
+                if *shortcut == Shortcut::Approvals && !self.approvals {
                     output.extend(self.pending.drain(..));
                     return None;
                 }
@@ -968,40 +857,14 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_requires_an_enabled_host_key_not_pasted_text_or_terminal_replies() {
-        for key in [
-            b"\x16".as_slice(),
-            b"\x1b[118;5u",
-            b"\x1b[118;5:1u",
-            b"\x1b[27;5;118~",
-        ] {
-            let mut filter = Hotkey {
-                clipboard: true,
-                ..Hotkey::default()
-            };
-            let mut output = VecDeque::new();
-            for byte in &key[..key.len() - 1] {
-                assert_eq!(filter.feed(*byte, &mut output), None);
-            }
-            assert_eq!(
-                filter.feed(*key.last().unwrap(), &mut output),
-                Some(Shortcut::Clipboard)
-            );
-            assert!(output.is_empty());
-            let mut disabled = Hotkey::default();
-            for byte in key {
-                assert_eq!(disabled.feed(*byte, &mut output), None);
-            }
-            assert_eq!(output.into_iter().collect::<Vec<_>>(), key);
-        }
+    fn pasted_text_and_terminal_replies_cannot_trigger_host_approvals() {
         for literal in [
-            b"\x1b[200~text\x16\x1b[118;5u\x1d\x1a\x03\x1b[201~".as_slice(),
-            b"\x1b]l\x16\x1b[118;5u\x07",
-            b"\x1bP\x16\x1b[118;5u\x07\x16\x1b\\",
-            b"\x1b_\x16\x1b\\",
+            b"\x1b[200~text\x16\x1d\x1a\x03\x1b[201~".as_slice(),
+            b"\x1b]l\x1d\x07",
+            b"\x1bP\x1d\x07\x1b\\",
+            b"\x1b_\x1d\x1b\\",
         ] {
             let mut filter = Hotkey {
-                clipboard: true,
                 approvals: true,
                 ..Hotkey::default()
             };
@@ -1011,8 +874,8 @@ mod tests {
             }
             assert_eq!(output.into_iter().collect::<Vec<_>>(), literal);
             assert_eq!(
-                filter.feed(0x16, &mut VecDeque::new()),
-                Some(Shortcut::Clipboard)
+                filter.feed(0x1d, &mut VecDeque::new()),
+                Some(Shortcut::Approvals)
             );
         }
     }

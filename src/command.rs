@@ -165,6 +165,7 @@ pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+#[cfg(test)]
 pub(crate) fn find_optional_executable(name: &str, path: &OsStr) -> Option<PathBuf> {
     env::split_paths(path)
         .map(|directory| directory.join(name))

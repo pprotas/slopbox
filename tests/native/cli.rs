@@ -11,23 +11,9 @@ fn native_cli_fixture() {
         std::env::var_os("SLOPBOX_TEST_OPENROUTER").is_some()
             || std::env::var_os("SLOPBOX_TEST_ACCOUNT").is_some()
     );
-    let cli = Cli::try_parse_from([
-        "slopbox",
-        "run",
-        "--dev-env",
-        "none",
-        "--",
-        "pi",
-        "--mode",
-        "rpc",
-        "--provider",
-        "openrouter",
-        "--model",
-        "openai/gpt-4o",
-        "--thinking",
-        "off",
-    ])
-    .unwrap();
+    let arguments: Vec<String> =
+        serde_json::from_str(&std::env::var("SLOPBOX_TEST_NATIVE_ARGS").unwrap()).unwrap();
+    let cli = Cli::try_parse_from(std::iter::once("slopbox".to_owned()).chain(arguments)).unwrap();
     run_cli(cli).unwrap();
 }
 
@@ -145,30 +131,6 @@ fn native_cli_fixture_requires_a_production_worker() {
 }
 
 #[test]
-#[ignore = "integration: set SLOPBOX_TEST_NODE, SLOPBOX_TEST_PI_CLI and SLOPBOX_TEST_SLOPBOX"]
-fn native_terminal_round_trip() {
-    let output = std::process::Command::new("/usr/bin/python3")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/native/terminal.py"
-        ))
-        .arg(std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required"))
-        .arg(std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"))
-        .arg(std::env::var_os("SLOPBOX_TEST_PI_CLI").expect("reviewed Pi path required"))
-        .env_clear()
-        .current_dir("/")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("native terminal !/!!"));
-}
-
-#[test]
 #[ignore = "host integration: native approval PTY; set SLOPBOX_TEST_NODE and SLOPBOX_TEST_SLOPBOX"]
 fn native_approval_view_round_trip() {
     let output = std::process::Command::new("/usr/bin/python3")
@@ -220,7 +182,7 @@ fn native_git_signing_helper_accepts_explicit_socket() {
 }
 
 #[test]
-#[ignore = "host integration: disposable SSH agent, Homebrew Git and reviewed SLOPBOX_TEST_* paths"]
+#[ignore = "host integration: disposable SSH agent, Xcode Git and reviewed SLOPBOX_TEST_* paths"]
 fn native_cli_git_signing_and_routes() {
     let output = std::process::Command::new(
         std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"),
@@ -228,7 +190,7 @@ fn native_cli_git_signing_and_routes() {
     .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native/git.mjs"))
     .arg(std::env::current_exe().unwrap())
     .arg(std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required"))
-    .arg(std::env::var_os("SLOPBOX_TEST_PI_CLI").expect("reviewed Pi path required"))
+    .arg(std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"))
     .env_clear()
     .current_dir("/")
     .output()
@@ -300,90 +262,4 @@ fn native_cli_github_account() {
         String::from_utf8_lossy(&output.stdout)
             .contains("native gh REST/GraphQL, host credential command and account denials passed")
     );
-}
-
-#[test]
-#[ignore = "host integration: Nix daemon, reviewed SLOPBOX_TEST_NODE, SLOPBOX_TEST_NIX and SLOPBOX_TEST_SLOPBOX"]
-fn native_cli_project_nix_environment() {
-    let output = std::process::Command::new(
-        std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"),
-    )
-    .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native/nix.mjs"))
-    .arg(std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required"))
-    .arg(std::env::var_os("SLOPBOX_TEST_NIX").expect("reviewed host Nix path required"))
-    .env_clear()
-    .current_dir("/")
-    .output()
-    .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains(
-        "native Nix builds, role separation, private cache and closure lifetimes passed"
-    ));
-}
-
-#[test]
-#[ignore = "host integration: installed Homebrew Git/ripgrep and reviewed SLOPBOX_TEST_* paths"]
-fn native_cli_homebrew_tools() {
-    let output = std::process::Command::new(
-        std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required"),
-    )
-    .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native/cli.mjs"))
-    .arg(std::env::current_exe().unwrap())
-    .arg(std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required"))
-    .arg(std::env::var_os("SLOPBOX_TEST_PI_CLI").expect("reviewed Pi path required"))
-    .args(["none", "live", "homebrew"])
-    .env_clear()
-    .current_dir("/")
-    .output()
-    .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("Homebrew Git and ripgrep passed through the production supervisor")
-    );
-}
-
-#[test]
-#[ignore = "integration: set SLOPBOX_TEST_NODE, SLOPBOX_TEST_PI_CLI and SLOPBOX_TEST_SLOPBOX"]
-fn native_cli_model_tool_round_trip() {
-    let node = std::env::var_os("SLOPBOX_TEST_NODE").expect("reviewed Node path required");
-    let cli = std::env::var_os("SLOPBOX_TEST_PI_CLI").expect("reviewed Pi path required");
-    let slopbox = std::env::var_os("SLOPBOX_TEST_SLOPBOX").expect("built Slopbox path required");
-    for (harness, workspace) in [
-        ("none", "live"),
-        ("data", "live"),
-        ("trusted", "live"),
-        ("trusted", "read-only"),
-    ] {
-        let output = std::process::Command::new(&node)
-            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native/cli.mjs"))
-            .arg(std::env::current_exe().unwrap())
-            .arg(&slopbox)
-            .arg(&cli)
-            .args([harness, workspace])
-            .env_clear()
-            .current_dir("/")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout)
-                .contains("native CLI model/tool round trip passed")
-        );
-    }
 }

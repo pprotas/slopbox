@@ -152,7 +152,7 @@ impl Profile {
                 workspace: WorkspaceMode::Live,
                 network: NetworkMode::Allowlist,
                 runtime: RuntimeMode::Host,
-                harness: HarnessMode::Trusted,
+                harness: HarnessMode::None,
                 persistence: PersistenceMode::Project,
                 credentials: CredentialMode::Brokered,
                 backend: Backend::Native,
@@ -161,7 +161,7 @@ impl Profile {
                 workspace: WorkspaceMode::Staged,
                 network: NetworkMode::Allowlist,
                 runtime: RuntimeMode::Project,
-                harness: HarnessMode::Data,
+                harness: HarnessMode::None,
                 persistence: PersistenceMode::Project,
                 credentials: CredentialMode::Brokered,
                 backend: Backend::Native,
@@ -207,13 +207,6 @@ impl Policy {
             } else {
                 Backend::Native
             },
-        }
-    }
-
-    pub fn without_host_harness(self) -> Self {
-        Self {
-            harness: HarnessMode::None,
-            ..self
         }
     }
 
@@ -273,13 +266,6 @@ mod tests {
         assert!(
             Profile::Developer
                 .policy()
-                .ensure_implemented(Profile::Developer)
-                .is_ok()
-        );
-        assert!(
-            Profile::Developer
-                .policy()
-                .without_host_harness()
                 .ensure_implemented(Profile::Developer)
                 .is_ok()
         );

@@ -150,7 +150,7 @@ executables = """
     assert "no automatic harness/tool separation" in status
     error = run(binary, success=False)
     assert "no default_command configured" in error, error
-    assert "Pi project setup" in run(
+    assert "unexpected argument 'init'" in run(
         binary,
         "init",
         "--workspace",
@@ -406,7 +406,7 @@ authentication = {{ type = "bearer", secret = "check" }}
         "-eu",
         "-c",
         """
-test "$OPENROUTER_API_KEY" = slopbox:openrouter
+test -z "${OPENROUTER_API_KEY-}"
 test -S /run/slopbox-host/model/gateway.sock
 slopbox tool-run --network none -- /bin/sh -eu -c '
     test -z "${OPENROUTER_API_KEY-}${SLOPBOX_MODEL_PROXY_PORT-}"

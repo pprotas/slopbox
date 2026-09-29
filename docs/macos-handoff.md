@@ -1,5 +1,7 @@
 # Native macOS session handoff
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 ## GitHub cutover checkpoint — 2026-09-26, before publication
 
 Cutover started from freshly fetched main at `0322733fc6e84e0f8fecbe26cb756dcfef88eda9`, after #12/PR #35 and its Linux CI passed. Pawel confirmed the Forgejo push mirror is disabled, the GitHub account is `pprotas`, and the repository must remain private. No license change was requested.

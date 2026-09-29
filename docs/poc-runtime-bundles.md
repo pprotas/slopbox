@@ -1,5 +1,7 @@
 # Explicit Linux application bundles
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 Follow-up to [selected executables without Nix](poc-nixless-linux.md). Adds host-selected application trees for runtime-loaded code, package metadata, plugins and data. It does not infer arbitrary environments or integrate another harness into Slopbox's core.
 
 ## Contract

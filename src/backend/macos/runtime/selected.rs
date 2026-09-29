@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
-use super::{Boundary, DeveloperTools, Host, NativeRuntime, absolute};
+use super::{Boundary, Host, NativeRuntime, absolute};
 use crate::backend::{RuntimePlan, RuntimeSelection};
 
 const SYSTEM_EXECUTABLE_DIRECTORIES: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
@@ -102,8 +102,6 @@ fn prepare_for(selection: &RuntimeSelection, host: &Host) -> Result<RuntimePlan>
     Ok(RuntimePlan {
         path: std::env::join_paths(directories)?,
         native: NativeRuntime {
-            config: None,
-            tools: DeveloperTools::default(),
             selected_files: files.into_iter().collect(),
             selected_roots: resources.roots,
             system_data: system_locale_data()?,

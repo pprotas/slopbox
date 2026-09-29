@@ -1,5 +1,7 @@
 # macOS Seatbelt spike
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 Recorded 2026-09-20 on `feat/macos-seatbelt-spike`, branched from freshly fetched `origin/main` at `56e3cfa`. The three refactor checkpoints in [macos-handoff.md](macos-handoff.md) are merged.
 
 **A narrow experimental native launcher now works.** The normal coordinator and gateway run an explicitly selected Pi/Node runtime with separately sandboxed bash. See [setup and limits](macos.md). Production-profile model/tool integration and actual-CLI terminal tests pass with disposable credentials. The shared engine separately passes concurrent-session and fresh-process crash recovery tests. Xcode and broader feature parity remain incomplete; nested profiles still fail.

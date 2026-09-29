@@ -1,5 +1,7 @@
 # Claude Code acceptance
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 Unmodified native **Claude Code 2.1.283** passes a headless fixture on aarch64 Ubuntu 25.04 without Nix and Apple silicon/macOS 27. Linux needed no core changes. macOS uses the new [generic native executable runtime](poc-native-runtime.md), not a Claude-specific launcher or resolver.
 
 `tests/claude-harness.py` checks:

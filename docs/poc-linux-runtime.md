@@ -1,5 +1,7 @@
 # Portable Nix-backed Linux POC
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 **Status: implemented and validated on stock-layout Ubuntu with single-user Nix.**
 
 This follows the [generic capabilities POC](poc-generic-capabilities.md) and [project direction](direction.md). It removes NixOS layout assumptions; it does not implement a runtime without Nix.

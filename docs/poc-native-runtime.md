@@ -1,5 +1,7 @@
 # Selected native macOS commands
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 Host-owned `[runtime].executables` now launches ordinary commands under Seatbelt without Pi configuration. The existing launchd/coalition supervisor, broker leases, clean environment and cleanup remain in use. This is a bounded native runtime, not Linux feature parity.
 
 ```toml

@@ -25,9 +25,9 @@ An extension routes calls; Slopbox enforces the resulting process boundary. Inte
 
 Requested stronger separation must fail explicitly if it cannot be provided. Ordinary command isolation remains useful without an integration, but is not an automatic fallback from the stronger contract.
 
-## Current migration work
+## Current implementation
 
-The embedded `assets/pi-extension.ts`, `src/harness/pi*` preparation, hardcoded `Agent::Pi` launch and related configuration/UI coupling still exist. Their presence is an implementation gap, not the intended ownership boundary. Extract harness-specific behavior while retaining generic enforcement and tests. Native tool execution is still wired to the Pi integration; a harness-neutral native interface is not yet implemented.
+The built-in Pi extension, preparation, and implicit launch have been removed. Generic commands run with shared outer authority. A cooperative external integration can request `slopbox tool-run` on Linux; no generic inner role exists on macOS. A historical saved record is read only as a policy ceiling, not as an integration.
 
 [Aider](poc-runtime-bundles.md) and [Claude Code](poc-claude-code.md) fixtures exercise ordinary isolation and account transport. The native Claude tests also cover live OpenRouter authentication, terminal use and resume. They do not establish automatic tool/model separation or arbitrary provider compatibility. Such acceptance tests may remain here without shipping the harness's integration code.
 

@@ -1,5 +1,7 @@
 # Generic capabilities POC
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 **Status: POC acceptance complete on native macOS and Linux.**
 
 This implements the first slice of the [project direction](direction.md), not universal CLI, harness, or runtime compatibility.

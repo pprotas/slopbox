@@ -1,6 +1,5 @@
 mod approval;
 mod backend;
-mod clipboard;
 mod command;
 mod fs_util;
 mod gateway;
@@ -8,7 +7,6 @@ mod git_config;
 mod git_signing;
 mod github;
 mod guest_environment;
-mod harness;
 mod http;
 mod launch;
 mod network;
@@ -24,7 +22,7 @@ use std::process;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use policy::{Profile, WorkspaceMode};
+use policy::Profile;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -69,24 +67,6 @@ enum ToolNetwork {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Configure or reconfigure this project for the default Pi launch.
-    Init {
-        #[arg(long)]
-        workspace: Option<PathBuf>,
-
-        /// How project changes should work; cannot exceed host or project policy.
-        #[arg(long, value_enum)]
-        changes: Option<WorkspaceMode>,
-
-        /// Exclude host Pi settings, instructions, extensions, and other resources.
-        #[arg(long)]
-        no_host_pi_resources: bool,
-
-        /// Save the displayed policy without prompting; requires --changes.
-        #[arg(long, requires = "changes")]
-        yes: bool,
-    },
-
     /// Manage host-side provider credentials.
     Auth {
         #[command(subcommand)]
@@ -106,14 +86,6 @@ enum Command {
         /// Development environment to activate.
         #[arg(long, value_enum, default_value_t)]
         dev_env: DevEnvironment,
-
-        /// Network capability for Pi shell commands.
-        #[arg(long, value_enum, default_value = "general")]
-        tool_network: ToolNetwork,
-
-        /// Do not load host Pi extensions, packages, skills, prompts, themes, settings, or AGENTS.md.
-        #[arg(long)]
-        no_host_pi_resources: bool,
 
         /// Enable experimental Ctrl-] host approvals (requires a host TTY).
         #[arg(long)]
@@ -148,10 +120,6 @@ enum Command {
         /// Override the configured policy preset.
         #[arg(long, value_enum)]
         profile: Option<Profile>,
-
-        /// Evaluate the policy without host Pi resources.
-        #[arg(long)]
-        no_host_pi_resources: bool,
     },
 
     /// Explain launch access without resolving credentials or starting a sandbox.
@@ -162,27 +130,18 @@ enum Command {
         #[arg(long, value_enum)]
         profile: Option<Profile>,
 
-        #[arg(long)]
-        no_host_pi_resources: bool,
-
-        #[arg(long, value_enum, default_value = "general")]
-        tool_network: ToolNetwork,
-
-        /// Include policy axes, mount targets, and trusted extension paths.
+        /// Include policy axes, mount targets, and selected runtime paths.
         #[arg(long)]
         verbose: bool,
     },
 
-    /// Diagnose default Pi launch prerequisites without running Pi or project code.
+    /// Diagnose launch prerequisites without executing project code.
     Doctor {
         #[arg(long)]
         workspace: Option<PathBuf>,
 
         #[arg(long, value_enum)]
         profile: Option<Profile>,
-
-        #[arg(long)]
-        no_host_pi_resources: bool,
     },
 
     /// Inspect and manage retained staged workspaces.
@@ -204,21 +163,8 @@ enum Command {
     Denials,
 
     #[cfg(target_os = "macos")]
-    #[command(name = "__macos-exec-worker", hide = true)]
-    MacosExecWorker {
-        socket: PathBuf,
-        profile: String,
-        workspace: PathBuf,
-        home: PathBuf,
-        #[arg(value_parser = clap::value_parser!(u64).range(1..=3600))]
-        seconds: u64,
-        #[arg(long)]
-        environment: Option<PathBuf>,
-    },
-
-    #[cfg(target_os = "macos")]
-    #[command(name = "__macos-harness-worker", hide = true)]
-    MacosHarnessWorker {
+    #[command(name = "__macos-command-worker", hide = true)]
+    MacosCommandWorker {
         socket: PathBuf,
         profile: String,
         workspace: PathBuf,
@@ -410,14 +356,6 @@ fn run_cli(cli: Cli) -> Result<()> {
         }
     };
     match command {
-        Command::Init {
-            workspace,
-            changes,
-            no_host_pi_resources,
-            yes,
-        } => {
-            session::init_project(workspace.as_deref(), changes, no_host_pi_resources, yes)?;
-        }
         Command::Auth { command } => match command {
             AuthCommand::Login { provider } => {
                 provider::AuthProvider::from(provider).login()?;
@@ -458,8 +396,6 @@ fn run_cli(cli: Cli) -> Result<()> {
             workspace,
             profile,
             dev_env,
-            tool_network,
-            no_host_pi_resources,
             approval_view,
             dry_run,
             command,
@@ -468,8 +404,6 @@ fn run_cli(cli: Cli) -> Result<()> {
                 workspace,
                 profile,
                 dev_env,
-                tool_network,
-                no_host_pi_resources,
                 command,
                 dry_run,
                 approval_view,
@@ -481,13 +415,8 @@ fn run_cli(cli: Cli) -> Result<()> {
         Command::ToolRun { network, command } => {
             exit_with_status(backend::native::tool::run(network, &command)?);
         }
-        Command::Policy {
-            workspace,
-            profile,
-            no_host_pi_resources,
-        } => {
-            let (profile, policy) =
-                session::effective_policy(workspace.as_deref(), profile, no_host_pi_resources)?;
+        Command::Policy { workspace, profile } => {
+            let (profile, policy) = session::effective_policy(workspace.as_deref(), profile)?;
             let supported = policy
                 .ensure_implemented(profile)
                 .and_then(|()| backend::ensure_supported());
@@ -522,13 +451,8 @@ fn run_cli(cli: Cli) -> Result<()> {
                 println!("git-signing-key: {fingerprint}");
             }
         }
-        Command::Doctor {
-            workspace,
-            profile,
-            no_host_pi_resources,
-        } => {
-            let (report, passed) =
-                session::doctor(workspace.as_deref(), profile, no_host_pi_resources)?;
+        Command::Doctor { workspace, profile } => {
+            let (report, passed) = session::doctor(workspace.as_deref(), profile)?;
             print!("{report}");
             anyhow::ensure!(
                 passed,
@@ -538,19 +462,11 @@ fn run_cli(cli: Cli) -> Result<()> {
         Command::Status {
             workspace,
             profile,
-            no_host_pi_resources,
-            tool_network,
             verbose,
         } => {
             print!(
                 "{}",
-                session::status(
-                    workspace.as_deref(),
-                    profile,
-                    no_host_pi_resources,
-                    tool_network,
-                    verbose
-                )?
+                session::status(workspace.as_deref(), profile, verbose)?
             );
         }
         Command::Stage { command } => match command {
@@ -631,25 +547,7 @@ fn run_cli(cli: Cli) -> Result<()> {
             backend::native::init::print_denials(port)?;
         }
         #[cfg(target_os = "macos")]
-        Command::MacosExecWorker {
-            socket,
-            profile,
-            workspace,
-            home,
-            seconds,
-            environment,
-        } => {
-            backend::native::engine::supervisor::worker_configured(
-                &socket,
-                &profile,
-                &workspace,
-                &home,
-                std::time::Duration::from_secs(seconds),
-                environment.as_deref(),
-            )?;
-        }
-        #[cfg(target_os = "macos")]
-        Command::MacosHarnessWorker {
+        Command::MacosCommandWorker {
             socket,
             profile,
             workspace,
@@ -766,7 +664,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_launch_accepts_pi_arguments_only_after_separator() {
+    fn default_launch_accepts_extra_arguments_only_after_separator() {
         let cli = Cli::try_parse_from(["slopbox"]).unwrap();
         assert!(cli.command.is_none());
         assert!(cli.agent_arguments.is_empty());
@@ -819,17 +717,8 @@ mod tests {
     }
 
     #[test]
-    fn noninteractive_setup_requires_an_explicit_changes_mode() {
+    fn removed_pi_setup_options_are_rejected() {
         assert!(Cli::try_parse_from(["slopbox", "init", "--yes"]).is_err());
-        let cli =
-            Cli::try_parse_from(["slopbox", "init", "--changes", "read-only", "--yes"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Init {
-                changes: Some(WorkspaceMode::ReadOnly),
-                yes: true,
-                ..
-            })
-        ));
+        assert!(Cli::try_parse_from(["slopbox", "status", "--no-host-pi-resources"]).is_err());
     }
 }

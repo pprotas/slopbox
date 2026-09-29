@@ -13,8 +13,6 @@ pub(crate) use macos as native;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::harness::PreparedHarness;
-
 pub(crate) fn ensure_supported() -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -35,26 +33,21 @@ pub(crate) struct Workspace<'a> {
 pub(crate) struct ExecutionPlan<'a> {
     pub workspace: Workspace<'a>,
     pub private_home: &'a Path,
+    #[cfg(target_os = "linux")]
     pub tool_home: &'a Path,
-    #[cfg(target_os = "macos")]
-    pub tool_cache: &'a Path,
     pub session_dir: &'a Path,
+    #[cfg(target_os = "linux")]
     pub dev_environment: Option<&'a PreparedDevEnvironment>,
     pub runtime: &'a RuntimePlan,
-    pub harness: &'a PreparedHarness,
     pub brokers: &'a BrokerConnections,
     pub environment: &'a [(OsString, OsString)],
     pub private_terminal: bool,
-    pub clipboard: bool,
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) struct PreparedDevEnvironment {
     pub script: PathBuf,
     pub profile: PathBuf,
-    #[cfg(target_os = "macos")]
-    pub bash: PathBuf,
-    #[cfg(target_os = "macos")]
-    pub store_paths: Vec<PathBuf>,
 }
 
 #[derive(Default, serde::Deserialize)]

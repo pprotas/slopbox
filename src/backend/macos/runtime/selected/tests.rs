@@ -1,5 +1,4 @@
 use super::*;
-use std::ffi::OsString;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
 pub(super) fn fixture() -> (tempfile::TempDir, Host) {
@@ -11,12 +10,6 @@ pub(super) fn fixture() -> (tempfile::TempDir, Host) {
         config: home.join(".config"),
         data: home.join(".local/share"),
         workspace: root.join("workspace"),
-        path: OsString::new(),
-        brew: vec![],
-        mise: home.join("mise"),
-        rustup: home.join(".rustup"),
-        rust_toolchain: None,
-        developer: None,
         home,
     };
     (directory, host)
@@ -38,7 +31,6 @@ fn selected_native_files_do_not_grant_installation_directories() {
         &host,
     )
     .unwrap();
-    assert!(runtime.native.config.is_none());
     assert!(runtime.native.selected_files.contains(&alias.join("echo")));
     assert!(
         runtime

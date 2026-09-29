@@ -1,5 +1,7 @@
 # Concepts
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 Slopbox separates who is acting, which external authority they can use, what software orchestrates the work, and where that work happens. Keeping these concepts distinct prevents configuration from collapsing into a list of secrets and mounts.
 
 These are internal design and advanced configuration concepts. The everyday interface should explain files, connections, accounts, and how changes are applied without requiring users to learn this vocabulary.

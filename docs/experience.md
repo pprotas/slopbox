@@ -1,5 +1,7 @@
 # User experience
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 Slopbox should let someone run a coding agent without learning namespaces, credential brokers, or network proxies. The [authoritative project direction](direction.md) governs this experience; current per-project setup is not the target onboarding requirement.
 
 The primary product promise is:

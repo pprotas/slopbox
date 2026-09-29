@@ -66,8 +66,6 @@ pub fn run(network: ToolNetwork, child: &[OsString]) -> Result<ExitStatus> {
         "--bind",
         "/run/slopbox-tool-home",
         "/home/slopbox",
-        "--tmpfs",
-        "/run/slopbox-pi-agent",
     ]);
 
     let authenticated_http_port = env::var("SLOPBOX_AUTHENTICATED_HTTP_PROXY_PORT")

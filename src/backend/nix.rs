@@ -1,9 +1,16 @@
+#[cfg(target_os = "linux")]
 use std::fs::OpenOptions;
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
+#[cfg(any(target_os = "linux", test))]
+use std::path::{Component, PathBuf};
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
-use anyhow::{Context, Result, ensure};
+#[cfg(any(target_os = "linux", test))]
+use anyhow::Context;
+use anyhow::{Result, ensure};
 
 use crate::DevEnvironment;
 
@@ -19,26 +26,7 @@ pub(crate) fn enabled(workspace: &Path, mode: DevEnvironment) -> Result<bool> {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) fn command(nix: &Path) -> Result<Command> {
-    use std::env;
-
-    let mut command = Command::new(nix);
-    command
-        .env_clear()
-        .env("HOME", env::var_os("HOME").context("HOME is not set")?)
-        .env(
-            "PATH",
-            env::join_paths([
-                nix.parent().context("Nix has no parent directory")?,
-                Path::new("/usr/bin"),
-                Path::new("/bin"),
-            ])?,
-        )
-        .args(["--extra-experimental-features", "nix-command flakes"]);
-    Ok(command)
-}
-
+#[cfg(target_os = "linux")]
 pub(crate) fn realize(
     command: &mut Command,
     workspace: &Path,
@@ -81,6 +69,7 @@ pub(crate) fn realize(
     Ok(profile)
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn store_root(path: &Path) -> Result<PathBuf> {
     ensure!(
         !path
@@ -100,6 +89,7 @@ pub(crate) fn store_root(path: &Path) -> Result<PathBuf> {
     Ok(Path::new("/nix/store").join(name))
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn closure_paths(output: &[u8]) -> Result<Vec<PathBuf>> {
     let output = std::str::from_utf8(output).context("Nix returned non-UTF-8 paths")?;
     let mut paths = Vec::new();

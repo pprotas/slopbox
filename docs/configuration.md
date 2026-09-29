@@ -42,31 +42,9 @@ CLIENT_STATE = "${HOME}/client"
 
 The example requires an attached account route. `${NAME}` expands only public session broker variables, `HOME` and `TMPDIR`; it never reads ambient host variables or named secrets. Missing references fail. Other text, including `$()` and unbraced `$NAME`, stays literal. Values are not recursively expanded. Use this for client settings and placeholders, not real credentials. Managed home/path/proxy/Git/Slopbox variables cannot be overridden. Input and expanded environments are bounded to 64 KiB; inspection lists names without values.
 
-## Legacy Pi setup
+## Saved project ceilings
 
-Without `default_command` or an explicit runtime selection, the older built-in Pi launch remains during migration. From a host terminal in the project:
-
-```bash
-slopbox
-```
-
-The first launch asks whether project changes should be immediate, staged for review, or read-only. This legacy setup only supports Pi. Slopbox shows the resulting access and saves it only after an explicit confirmation. Later launches reuse the saved policy and print the access summary before starting Pi.
-
-Pass Pi arguments after `--`, or reconfigure without launching:
-
-```bash
-slopbox -- --continue
-slopbox init
-slopbox init --changes staged --no-host-pi-resources --yes
-```
-
-`--yes` is the explicit noninteractive approval path and requires `--changes`. Without it, setup requires a terminal; piped agent input is never consumed as setup approval. If model brokering is enabled but no model account is configured, launch stops with host-side login instructions.
-
-Setup writes a private file under `~/.config/slopbox/projects/<workspace-hash>.toml` (or the corresponding `$XDG_CONFIG_HOME`), never inside the repository. It snapshots the confirmed policy axes as an additional ceiling. `run`, `policy`, and `status` honor that ceiling too, so removing a restrictive `.slopbox.toml` cannot silently broaden future launches.
-
-Re-running `init` re-evaluates current host and project policy and replaces the saved ceiling after confirmation. Review the whole summary: this can change more than the workspace mode. Host-managed routes, identities, and resource declarations still come from global configuration; they are not frozen copies in the setup record. Read-only project files do not imply read-only account access.
-
-The existing `run -- <command>` interface remains available without first-run setup. Where setup exists, it cannot bypass the saved policy ceiling.
+Older host-side project records in `$XDG_CONFIG_HOME/slopbox/projects/` remain readable as restrictive policy ceilings. Default launch, explicit `run`, `policy` and `status` honor them. Removing a repository manifest or upgrading Slopbox does not discard the saved ceiling. The built-in `init`/Pi setup is removed; review and remove an obsolete record deliberately on the host if you intend to change its ceiling.
 
 ## Profile and policy
 
@@ -77,7 +55,7 @@ profile = "developer"
 workspace = "live"
 network = "allowlist"
 runtime = "host"
-harness = "trusted"
+harness = "none"
 persistence = "project"
 credentials = "brokered"
 backend = "native"
@@ -85,18 +63,16 @@ backend = "native"
 
 The profile supplies defaults. Host policy, the saved project setup, and repository policy can reduce them. Unsupported combinations fail at launch.
 
-`network = "none"` disables general egress, not fixed model or configured authenticated account routes. `credentials = "none"` disables model routes; it does not disable account routes or Git signing. Likewise, `--tool-network=none` leaves configured authenticated account routes available to project commands. These settings alone must not be described as an offline session.
+`network = "none"` disables general egress, not fixed model or configured authenticated account routes. `credentials = "none"` disables model routes; it does not disable account routes or Git signing. An explicit Linux `slopbox tool-run --network none` also retains configured authenticated account routes. These settings alone must not be described as an offline session.
 
-The default Nix-backed developer runtime exposes the host Nix store read-only, and selected Pi resources may expose other host data. Limiting project writes does not mean that only project files are readable.
-
-Online `developer` sessions let Pi refresh model catalogs through the ordinary deny-by-default gateway. Approve the catalog destination, then reopen `/model` or run `pi update --models`. Stricter profiles keep Pi's catalog and package refresh logic offline.
+The default Nix-backed developer runtime exposes the host Nix store read-only. Limiting project writes does not mean that only project files are readable.
 
 A project may contain a narrowing-only `.slopbox.toml`:
 
 ```toml
 [policy]
 workspace = "staged"
-harness = "data"
+harness = "none"
 network = "none"
 ```
 
@@ -116,7 +92,7 @@ credentials = "none"
 executables = ["curl", "git"]
 ```
 
-Use `slopbox run --dev-env none -- COMMAND`; this mode does not provide Pi default launch/setup. `runtime=project` and contained profiles do not fall back to it. Model/account/signing authority remains governed independently.
+Use `slopbox run --dev-env none -- COMMAND`; no built-in harness launch/setup exists. `runtime=project` and contained profiles do not fall back to it. Model/account/signing authority remains governed independently.
 
 Names select protected host installations. Absolute and `~/` executable paths select user installations; authorize their dependency prefix with `dependency_roots = ["~/.local/tools/example"]`. Dependency roots authorize discovered files, not whole-prefix mounts. Repository configuration cannot declare runtime grants. `status --verbose` reports the host selection without running discovery or resolving secrets.
 
@@ -134,25 +110,9 @@ See [executable limits](poc-nixless-linux.md) and [bundle behavior and non-Pi ha
 
 ## Selected native macOS executables
 
-The same host-owned `[runtime].executables` selection supports generic native commands without `[macos]` Pi/Node configuration. It requires `runtime=host` and `harness=none`. An explicit runtime selection makes `--dev-env auto` use those host resources without evaluating a project flake; an explicit `--dev-env flake` remains an error. Bare names select system commands; other installations need absolute or `~/` paths.
+The same host-owned `[runtime].executables` selection supports generic native commands without backend-specific harness configuration. It requires `runtime=host` and `harness=none`. An explicit runtime selection makes `--dev-env auto` use those host resources without evaluating a project flake; an explicit `--dev-env flake` remains an error. Bare names select system commands; other installations need absolute or `~/` paths.
 
 Native discovery accepts host-architecture Mach-O executables and dylib dependencies, plus simple scripts with explicitly selected interpreters. `bundles` grants whole read-only application trees; `dependency_roots` authorizes discovered dylib files without exposing those directories. Loader-relative dependencies and known runpath stacks are resolved without executing selected programs. Generic subprocesses retain outer account/model authority; there is no native `tool-run` role in this mode. See [runtime grants and limitations](poc-native-runtime.md).
-
-## Pi resources
-
-```toml
-[[pi.read_only_mounts]]
-source = "~/.local/share/example-data"
-target = "~/.local/share/example-data"
-
-[[pi.temporary_overlay_mounts]]
-source = "~/.cache/camoufox"
-target = "~/.cache/camoufox"
-```
-
-Read-only mounts expose host data without allowing changes. Temporary overlays use the host directory as a read-only lower layer and discard sandbox writes at session exit.
-
-Targets are restricted to sandbox cache, configuration, and data directories. Slopbox rejects known credential roots and resource trees containing Unix sockets. These mounts are disabled when host Pi resources are disabled.
 
 ## Secrets
 
@@ -261,7 +221,7 @@ accounts = []
 
 Both `~/Projects/first` and `~/Work/second` select the same definitions without repository configuration. Directory rules match canonical directory trees and apply broadest first, regardless of declaration order. An omitted setting inherits; `git_identity = false` disables signing and `accounts = []` disables accounts. Account lists replace rather than append. Equally specific overlapping rules fail closed.
 
-Existing `workspace` bindings remain exact-workspace ceilings even when selected by name. Without an explicit selection, legacy workspace-bound entries still activate; unbound entries do not. Unknown selections fail before resolving secrets. Repository `.slopbox.toml` cannot define these grants. `slopbox status --verbose` shows selected access, matching host rule indexes, and each selection's source (defaults, directory rule or legacy binding) without resolving secrets. A configured `default_command` uses ordinary execution without project initialization; legacy implicit Pi launch still requires setup.
+Existing `workspace` bindings remain exact-workspace ceilings even when selected by name. Without an explicit selection, legacy workspace-bound entries still activate; unbound entries do not. Unknown selections fail before resolving secrets. Repository `.slopbox.toml` cannot define these grants. `slopbox status --verbose` shows selected access, matching host rule indexes, and each selection's source (defaults, directory rule or legacy binding) without resolving secrets. A configured `default_command` uses ordinary execution without project initialization; bare launch requires a configured `default_command`.
 
 ### Experimental shared HTTPS transport
 
@@ -333,7 +293,7 @@ This exposes every API operation authorized to the configured account. Keep prov
 
 [github.toml](github.toml) is a generic host-configuration template for Git smart HTTP, repository-scoped REST calls and commit signing. Keep the completed configuration outside the repository.
 
-An account route can opt into origin-addressed requests with `direct = true`. Slopbox generates private `gh` transport settings using its documented `http_unix_socket` option. Tool processes receive a synthetic token, not the host login. Pi does not receive the `GH_TOKEN` marker. The socket matches the request's host and path against opted-in routes; overlapping routes fail at launch. This is brokered HTTP over a local socket, not direct Internet access or TLS interception.
+An account route can opt into origin-addressed requests with `direct = true`. Slopbox generates private `gh` transport settings using its documented `http_unix_socket` option. Tool processes receive a synthetic token, not the host login. Unattached processes do not receive the `GH_TOKEN` marker. The socket matches the request's host and path against opted-in routes; overlapping routes fail at launch. This is brokered HTTP over a local socket, not direct Internet access or TLS interception.
 
 With the template's repository-prefix route:
 
@@ -394,19 +354,7 @@ Rule changes use a host-owned, mode-`0600` `network-rules.json` file, a per-proj
 
 Foreground interactive launches use a private PTY, including bare `slopbox`. The supervisor forwards terminal dimensions so sandboxed applications receive resize events despite session isolation. It also handles Ctrl-Z suspension and restores host terminal settings on exit. Pipes and noninteractive launches keep their standard streams unchanged.
 
-The approval hotkey is separate and opt-in. Without `--approval-view`, Ctrl-] reaches Pi normally. Host broker diagnostics are buffered and escaped rather than interleaved with Pi's display.
-
-### Clipboard images on Wayland
-
-In an interactive Pi launch (`slopbox` or `slopbox run ... -- pi`), **Ctrl+V** imports the current clipboard image through host `wl-paste`. Slopbox pastes its sandbox-local path into the editor, matching Pi's native image-paste behavior. It does not submit the prompt. Ghostty's classic and Kitty-protocol Ctrl+V encodings are supported; `--approval-view` is not required.
-
-Only PNG, JPEG, WebP, and GIF are imported. Use the terminal's normal paste shortcut (usually Ctrl+Shift+V in Ghostty) for text. Slopbox owns Ctrl+V for direct interactive Pi launches; Pi keybinding remaps do not change the host shortcut. Generic commands, pipelines, and noninteractive launches do not get this bridge.
-
-The packaged command and development shell include `wl-paste`. Raw debug binaries need it on the host Nix PATH; launch with `nix develop -c ./target/debug/slopbox`. Missing Wayland access, empty/non-image clipboards, and failed reads show a host notice. Enter or Escape returns to Pi; no failed paste is retried automatically.
-
-Reads have short deadlines and stay cancellable with Escape or Ctrl+C. Later input is held until the paste finishes, so an immediately following Enter cannot overtake the image. A failed or cancelled read discards queued later input. Limits are 20 MiB per image and 64 images or 128 MiB per launch.
-
-Imports are private, session-local files mounted read-only at `/run/slopbox-clipboard`, including in inner tools. They do not modify the workspace and work with staged/read-only workspaces. Normal shutdown deletes the files; abrupt termination can leave private runtime files behind. Images already read or submitted may remain in Pi history. The sandbox receives no Wayland/X11 socket or continuous clipboard access.
+The approval hotkey is separate and opt-in. Without `--approval-view`, Ctrl-] reaches the selected command normally. Host broker diagnostics are buffered and escaped rather than interleaved with the guest display.
 
 ### Host approval view (prototype)
 
@@ -431,28 +379,22 @@ Press **Ctrl-]** to open the host view. It shows this session's denial history a
 - `refresh`: reload events and rules; `n` / `b`: change pages.
 - `q`: return to the guest. `]` then Enter returns and sends a literal Ctrl-].
 
-Every mutation displays the full destination and scope, then requires a fresh 12-character confirmation code. A wrong response cancels; queued input is discarded at view transitions. Commands and confirmation input are not forwarded to Pi. Approval says “retry”; it does not replay the operation. The guest continues executing while the view is open, though its terminal output is paused and may back up.
+Every mutation displays the full destination and scope, then requires a fresh 12-character confirmation code. A wrong response cancels; queued input is discarded at view transitions. Commands and confirmation input are not forwarded to the guest. Approval says “retry”; it does not replay the operation. The guest continues executing while the view is open, though its terminal output is paused and may back up.
 
 As with ordinary interactive launches, the supervisor gives the guest a separate PTY and retains the real terminal. Ctrl-Z in the guest view suspends the supervisor and its foreground sandbox process group; use the shell's `fg` to resume. Normal exit and handled termination signals restore host terminal settings. SIGKILL cannot run cleanup.
 
-This is not a screen-preserving terminal multiplexer: returning clears the view and briefly resizes the guest PTY to request a redraw. Pi redraw, suspension, termination, and approvals are tested through PTYs, but visual behavior across terminal emulators still needs manual validation. Resize the window if rendering remains stale, or relaunch without `--approval-view`. Broker diagnostics are isolated from the approval display; their last 16 KiB are escaped and printed when the terminal session ends.
+This is not a screen-preserving terminal multiplexer: returning clears the view and briefly resizes the guest PTY to request a redraw. Guest redraw, suspension, termination, and approvals are tested through PTYs, but visual behavior across terminal emulators still needs manual validation. Resize the window if rendering remains stale, or relaunch without `--approval-view`. Broker diagnostics are isolated from the approval display; their last 16 KiB are escaped and printed when the terminal session ends.
 
 ## Concurrent sessions
 
-Multiple Slopbox sessions can run against the same project. Generated Pi resources, settings, synthetic auth files, wrappers, Git signing configuration, and development-environment files belong to each run. Starting or exiting another session does not replace their mounted files. Normal exit and setup failures clean up only that run's generated files.
-
-Pi history, model-catalog state, and package caches remain project-persistent. Live sessions also share the workspace: Slopbox does not prevent two agents from editing the same file or Git branch. Use separate workspaces or staged mode when changes should remain separate. Do not resume the same Pi conversation concurrently.
-
-`slopbox network events` shows retained denials from all project sessions. Request IDs identify the originating session, so `network approve <request-id>` applies only there by default. Session liveness is tracked by host-held locks; an exited supervisor cannot retain session approval authority through a stale marker file.
-
-Restart existing sessions after upgrading from the shared-runtime implementation. A supervisor killed without cleanup may leave generated runtime files behind; automatic stale-file cleanup is not yet implemented.
+Each run has separate generated configuration and broker lifetimes. Private application home and package caches persist per workspace; live sessions share that workspace and its state. They are not isolated from each other. Use separate workspaces or staging to separate edits.
 
 ## Inspecting effective configuration
 
 ```bash
 slopbox status
 slopbox status --verbose
-slopbox status --no-host-pi-resources --tool-network none
+slopbox status --verbose
 slopbox policy
 slopbox run --dry-run -- /bin/sh
 ```
@@ -470,11 +412,7 @@ Run from a host terminal, not from the agent's shell:
 ```bash
 slopbox doctor
 slopbox doctor --workspace /path/to/project --profile contained
-slopbox doctor --no-host-pi-resources
+slopbox doctor
 ```
 
-`doctor` checks default Pi launch prerequisites using the same saved and repository policy ceilings. It reports unsupported policies, workspace sockets/submounts, missing host tools or resources, missing model configuration, invalid account references, and missing development flakes. It also runs a five-second bubblewrap probe with outer and nested tool namespaces, an empty environment, no workspace mounts, and no broker access.
-
-A failed check returns a nonzero exit status with guidance. Missing project setup is a notice, not a failure: initialize it in a host terminal. Doctor does not create project state, modify approvals, start Pi, execute extensions or shell hooks, evaluate Nix, decrypt secrets, query signing keys, or contact providers. Temporary probe diagnostics are removed afterward.
-
-A passing result covers only the reported checks. Full launch mounts, Pi compatibility, credential validity, signing, upstream connectivity, Nix realization/daemon access, and disk capacity remain unchecked.
+`doctor` checks generic launch prerequisites and performs bounded enforcement probes without executing the selected application, reading secret contents, evaluating Nix, or contacting providers. Passing does not establish credential validity, signing, upstream connectivity, Nix realization or arbitrary client compatibility.

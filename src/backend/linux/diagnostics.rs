@@ -23,13 +23,6 @@ pub(crate) fn check(
     ));
     match sandbox_path() {
         Ok(host_path) => {
-            if selection.is_none() {
-                checks.push((
-                    "Pi executable",
-                    executable("pi", &host_path)
-                        .map(|path| format!("{} (not started)", path.display())),
-                ));
-            }
             if policy.backend == Backend::Native {
                 checks.push((
                     "Namespaces",

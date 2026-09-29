@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-const [driver, slopbox, pi] = process.argv.slice(2);
-assert(driver && slopbox && pi, "driver, Slopbox and Pi paths required");
-const git = ["/opt/homebrew/bin/git", "/usr/local/bin/git"].find(existsSync);
-assert(git && /\/Cellar\/git\//.test(realpathSync(git)), "Homebrew Git required");
+const [driver, slopbox, node] = process.argv.slice(2);
+assert(driver && slopbox && node, "driver, Slopbox and Node paths required");
+const git = "/Applications/Xcode.app/Contents/Developer/usr/bin/git";
+assert(existsSync(git), "Xcode Git required");
+const gitCore = "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core";
 const root = mkdtempSync("/private/var/tmp/slopbox-git-");
 const workspace = join(root, "workspace");
 const repository = join(root, "repositories/fixture.git");
@@ -21,7 +22,6 @@ const remote = "ssh://git@forgejo.native.invalid/org/fixture.git";
 const pushUrl = "https://forgejo.native.invalid/org/fixture.git";
 const token = randomBytes(32).toString("hex");
 const hostEnv = { PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
-const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 function run(command, args, env = hostEnv) {
   const result = spawnSync(command, args, { env, encoding: "utf8", timeout: 15000 });
   assert.ifError(result.error);
@@ -132,9 +132,11 @@ try {
 harness = "none"
 network = "none"
 credentials = "none"
-[macos]
-node = ${JSON.stringify(process.execPath)}
-pi_cli = ${JSON.stringify(pi)}
+[runtime]
+executables = ${JSON.stringify([git, join(gitCore, "git-remote-http"), join(gitCore, "git-remote-https"), node])}
+[environment]
+GIT_EXEC_PATH = ${JSON.stringify(gitCore)}
+GIT_TEMPLATE_DIR = ""
 [secrets.fixture]
 source = "environment"
 variable = "NATIVE_FIXTURE_FORGEJO_TOKEN"
@@ -161,39 +163,18 @@ authentication = { type = "token", secret = "fixture" }
       cwd: workspace,
       env: { ...hostEnv, HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"),
         SSH_AUTH_SOCK: agentSocket, NATIVE_FIXTURE_FORGEJO_TOKEN: token, SLOPBOX_TEST_SLOPBOX: slopbox,
-        SLOPBOX_TEST_ACCOUNT: `127.0.0.1:${broker.address().port}` },
-      stdio: ["pipe", "pipe", "pipe"],
+        SLOPBOX_TEST_ACCOUNT: `127.0.0.1:${broker.address().port}`,
+        SLOPBOX_TEST_NATIVE_ARGS: JSON.stringify(["run", "--workspace", workspace, "--dev-env", "none", "--", node, "git-guest.mjs", phase]) },
+      stdio: ["ignore", "pipe", "pipe"],
     });
     closed = once(child, "close");
-    let stderr = "";
-    let text = "";
-    const events = [];
-    child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
-    child.stdout.setEncoding("utf8").on("data", (chunk) => {
-      text += chunk;
-      assert(text.length < 1024 * 1024);
-      let index;
-      while ((index = text.indexOf("\n")) !== -1) {
-        const line = text.slice(0, index);
-        text = text.slice(index + 1);
-        if (line.startsWith("{")) events.push(JSON.parse(line));
-      }
-    });
-    child.stdin.write(`${JSON.stringify({ id: phase, type: "bash", command: `${quote(process.execPath)} git-guest.mjs ${phase}` })}\n`);
-    const deadline = Date.now() + 60000;
-    while (!events.some((event) => event.type === "response" && event.id === phase)) {
-      assert.ifError(brokerError);
-      assert(child.exitCode === null && child.signalCode === null, stderr);
-      assert(Date.now() < deadline, `Git fixture timed out: ${stderr}`);
-      await delay(10);
-    }
-    const event = events.find((event) => event.type === "response" && event.id === phase);
-    assert(event.success, JSON.stringify(event));
-    assert.equal(event.data.exitCode, 0, `${event.data.output}\n${stderr}`);
-    assert(event.data.output.includes(`native Git ${phase} passed`), event.data.output);
-    assert(!event.data.output.includes(token) && !stderr.includes(token), "credential leaked");
-    child.stdin.end();
-    assert.equal((await closed)[0], 0, stderr);
+    let log = "";
+    child.stderr.setEncoding("utf8").on("data", (chunk) => { log += chunk; assert(log.length < 1024 * 1024); });
+    child.stdout.setEncoding("utf8").on("data", (chunk) => { log += chunk; assert(log.length < 1024 * 1024); });
+    const result = await Promise.race([closed, delay(60000).then(() => { throw new Error(`Git fixture timed out: ${log}`); })]);
+    assert.equal(result[0], 0, log.replaceAll(token, "[REDACTED]"));
+    assert(log.includes(`native Git ${phase} passed`), log);
+    assert(!log.includes(token), "credential leaked");
     assert.ifError(brokerError);
     assert.deepEqual(readFileSync(join(workspace, ".git/config")), original);
     const state = JSON.parse(readFileSync(join(workspace, "signing-state.json"), "utf8"));

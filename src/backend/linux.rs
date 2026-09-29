@@ -22,9 +22,6 @@ use super::ExecutionPlan;
 #[cfg(test)]
 use super::{BrokerConnections, RuntimePlan, Workspace};
 use crate::fs_util::find_socket;
-use crate::harness::MountAccess;
-#[cfg(test)]
-use crate::harness::PreparedHarness;
 
 pub(crate) fn command(
     bwrap: &Path,
@@ -82,10 +79,6 @@ pub(crate) fn command(
         add_dir(&mut command, directory);
     }
 
-    for directory in &plan.harness.directories {
-        add_dir(&mut command, directory);
-    }
-
     for path in &plan.runtime.read_only_paths {
         add_parent_dirs(&mut command, path);
         command.arg("--ro-bind").arg(path).arg(path);
@@ -131,33 +124,6 @@ pub(crate) fn command(
             .arg("--ro-bind")
             .arg(&dev_environment.script)
             .arg("/run/slopbox/dev-env.sh");
-    }
-    if plan.clipboard {
-        command
-            .arg("--ro-bind")
-            .arg(plan.session_dir.join("clipboard"))
-            .arg(crate::clipboard::MOUNT);
-    }
-    for mount in &plan.harness.mounts {
-        add_parent_dirs(&mut command, &mount.target);
-        match mount.access {
-            MountAccess::ReadOnly => {
-                command
-                    .arg("--ro-bind")
-                    .arg(&mount.source)
-                    .arg(&mount.target);
-            }
-            MountAccess::ReadWrite => {
-                command.arg("--bind").arg(&mount.source).arg(&mount.target);
-            }
-            MountAccess::TemporaryOverlay => {
-                command
-                    .arg("--overlay-src")
-                    .arg(&mount.source)
-                    .arg("--tmp-overlay")
-                    .arg(&mount.target);
-            }
-        }
     }
     let gitconfig = plan.session_dir.join("gitconfig");
     let has_gitconfig = gitconfig.is_file();
@@ -212,7 +178,6 @@ pub(crate) fn command(
     for (name, value) in sandbox_environment(sandbox_path, has_gitconfig, plan.workspace.target)
         .into_iter()
         .chain(plan.environment.iter().cloned())
-        .chain(plan.harness.environment.iter().cloned())
     {
         command.arg("--setenv").arg(name).arg(value);
     }
@@ -494,10 +459,7 @@ pub(crate) fn validate_workspace_target(workspace: &Path) -> Result<()> {
         [
             "/run/slopbox",
             "/run/slopbox-host",
-            "/run/slopbox-tool-home",
-            "/run/slopbox-pi-agent",
-            "/run/slopbox-host-pi",
-            "/run/slopbox-clipboard"
+            "/run/slopbox-tool-home"
         ]
         .iter()
         .all(|root| !workspace.starts_with(root) && !Path::new(root).starts_with(workspace)),
@@ -586,7 +548,6 @@ mod tests {
             system_links: vec![("/bin/sh".into(), "/nix/store/fixture-shell/bin/sh".into())],
             path: "/nix/store/fixture-runtime/bin".into(),
         };
-        let harness = PreparedHarness::default();
         let cases = [
             (BrokerConnections::default(), vec![]),
             (
@@ -632,11 +593,9 @@ mod tests {
                 session_dir: session.path(),
                 dev_environment: None,
                 runtime: &runtime,
-                harness: &harness,
                 brokers: &brokers,
                 environment: &[],
                 private_terminal: false,
-                clipboard: false,
             };
             let command = command(Path::new("/not-executed/bwrap"), &plan, &["sh".into()]).unwrap();
             let arguments: Vec<_> = command
@@ -732,7 +691,6 @@ mod tests {
             system_links: vec![("/bin/sh".into(), "/nix/store/fixture-shell/bin/sh".into())],
             path: "/nix/store/fixture-runtime/bin".into(),
         };
-        let harness = PreparedHarness::default();
         let brokers = BrokerConnections::default();
         let plan = ExecutionPlan {
             workspace: Workspace {
@@ -745,11 +703,9 @@ mod tests {
             session_dir: session.path(),
             dev_environment: None,
             runtime: &runtime,
-            harness: &harness,
             brokers: &brokers,
             environment: &[],
             private_terminal: true,
-            clipboard: false,
         };
         let child = vec![
             OsString::from("/bin/sh"),

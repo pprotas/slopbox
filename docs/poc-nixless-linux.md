@@ -1,5 +1,7 @@
 # Selected Linux executables without Nix
 
+> Historical design/validation record. Built-in Pi launch and integration have since been removed; use [current configuration](configuration.md) and the [security model](../SECURITY-MODEL.md) for supported behavior.
+
 **Status: implemented; bounded acceptance passes on a fresh Ubuntu installation without Nix.**
 
 Follow-up to [portable Nix-backed Linux](poc-linux-runtime.md). This slice supplies a host-selected runtime for ordinary Linux commands, not automatic language environments or harness integration. The subsequent [application-bundle slice](poc-runtime-bundles.md) adds explicit read-only resource trees and non-Pi harness acceptance.

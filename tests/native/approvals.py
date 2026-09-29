@@ -22,16 +22,13 @@ for scenario in ["approvals", "plain", "disabled", "exit-in-view"]:
     with tempfile.TemporaryDirectory(prefix="slopbox-approvals-", dir="/private/var/tmp") as directory:
         root = Path(directory)
         workspace = root / "workspace"
-        for name in ["workspace", "home", "config/slopbox", "data", "runtime/pi/dist"]:
+        for name in ["workspace", "home", "config/slopbox", "data"]:
             (root / name).mkdir(parents=True)
-        # Raw hostile output and exact input auditing need a deterministic harness probe.
-        package = root / "runtime/pi"
-        (package / "package.json").write_text(json.dumps({"name": "@earendil-works/pi-coding-agent", "type": "module"}))
-        (package / "dist/cli.js").write_bytes(Path(__file__).with_name("approvals-probe.mjs").read_bytes())
+        (workspace / "approvals-probe.mjs").write_bytes(Path(__file__).with_name("approvals-probe.mjs").read_bytes())
         network = "none" if scenario == "disabled" else "allowlist"
         (root / "config/slopbox/config.toml").write_text(
             f'[policy]\nharness="none"\ncredentials="none"\nnetwork="{network}"\n'
-            f'[macos]\nnode={json.dumps(node)}\npi_cli={json.dumps(str(package / "dist/cli.js"))}\n'
+            f'[runtime]\nexecutables={json.dumps([node])}\n'
         )
         environment = {
             "HOME": str(root / "home"), "XDG_CONFIG_HOME": str(root / "config"),
@@ -58,7 +55,7 @@ for scenario in ["approvals", "plain", "disabled", "exit-in-view"]:
             arguments = [slopbox, "run", "--dev-env", "none"]
             if scenario != "plain":
                 arguments.append("--approval-view")
-            os.execve(slopbox, arguments + ["--", "pi"], environment)
+            os.execve(slopbox, arguments + ["--", node, "approvals-probe.mjs"], environment)
         output = bytearray()
         pending = bytearray()
         deadline = time.monotonic() + 45

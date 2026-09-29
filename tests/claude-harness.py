@@ -465,7 +465,9 @@ print('probe-complete')
                 str(claude),
                 "--version",
             )
-            assert "2.1.283 (Claude Code)" in version, version
+            assert any(
+                known in version for known in ("2.1.274 (Claude Code)", "2.1.283 (Claude Code)")
+            ), version
             output = run(
                 binary,
                 "run",

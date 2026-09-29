@@ -11,8 +11,8 @@ use std::time::Duration;
 use super::{
     coalition::Coalition,
     job::{Job, connect_worker},
+    process,
     session::Role,
-    supervisor,
 };
 
 static RESIZED: AtomicBool = AtomicBool::new(false);
@@ -28,21 +28,20 @@ pub fn command(
     arguments: &[String],
 ) -> io::Result<(Job, Command)> {
     let body = format!("{}\0", arguments.join("\0"));
-    supervisor::arguments(body.as_bytes())?;
-    if body.len() > supervisor::MAX_REQUEST
-        || arguments.iter().any(|argument| argument.contains('\0'))
+    process::arguments(body.as_bytes())?;
+    if body.len() > process::MAX_REQUEST || arguments.iter().any(|argument| argument.contains('\0'))
     {
-        return Err(io::Error::other("invalid harness arguments"));
+        return Err(io::Error::other("invalid command arguments"));
     }
     let (job, stream) = Job::start(
         executable,
         tasks,
-        "__macos-harness-worker",
+        "__macos-command-worker",
         &[
             role.profile.clone(),
-            supervisor::path_text(&role.workspace)?,
-            supervisor::path_text(&role.home)?,
-            supervisor::path_text(environment)?,
+            process::path_text(&role.workspace)?,
+            process::path_text(&role.home)?,
+            process::path_text(environment)?,
         ],
         &[],
     )?;
@@ -65,7 +64,7 @@ pub fn command(
 
 pub fn bridge(descriptor: i32, arguments: &[String]) -> io::Result<i32> {
     if descriptor < 3 {
-        return Err(io::Error::other("invalid harness control descriptor"));
+        return Err(io::Error::other("invalid command control descriptor"));
     }
     let mut stream = unsafe { UnixStream::from_raw_fd(descriptor) };
     stream.set_nonblocking(false)?;
@@ -116,7 +115,7 @@ pub fn bridge(descriptor: i32, arguments: &[String]) -> io::Result<i32> {
         }
         match stream.read(&mut byte) {
             Ok(1) => return Ok(byte[0] as i32),
-            Ok(_) => return Err(io::Error::other("harness worker disconnected")),
+            Ok(_) => return Err(io::Error::other("command worker disconnected")),
             Err(error)
                 if matches!(
                     error.kind(),
@@ -162,7 +161,7 @@ pub fn worker(
         || message.msg_flags & libc::MSG_CTRUNC != 0
         || byte != *b"I"
     {
-        return Err(io::Error::other("invalid harness stdio"));
+        return Err(io::Error::other("invalid command stdio"));
     }
     let files: Vec<_> = (0..3)
         .map(|index| unsafe {
@@ -177,15 +176,15 @@ pub fn worker(
     let mut length = [0; 4];
     stream.read_exact(&mut length)?;
     let length = u32::from_be_bytes(length) as usize;
-    if length == 0 || length > supervisor::MAX_REQUEST {
-        return Err(io::Error::other("invalid harness request"));
+    if length == 0 || length > process::MAX_REQUEST {
+        return Err(io::Error::other("invalid command request"));
     }
     let mut bytes = vec![0; length];
     stream.read_exact(&mut bytes)?;
-    let arguments = supervisor::arguments(&bytes)?;
-    let environment = supervisor::read_environment(Some(environment))?;
+    let arguments = process::arguments(&bytes)?;
+    let environment = process::read_environment(Some(environment))?;
     let coalition = Coalition::read(std::process::id() as i32)?;
-    let mut child = supervisor::spawn(
+    let mut child = process::spawn(
         profile,
         workspace,
         home,
@@ -210,7 +209,7 @@ pub fn worker(
             Ok(1) if byte == *b"W" => unsafe {
                 libc::kill(child.0, libc::SIGWINCH);
             },
-            Ok(_) => return Err(io::Error::other("harness controller disconnected")),
+            Ok(_) => return Err(io::Error::other("command controller disconnected")),
             Err(error)
                 if matches!(
                     error.kind(),

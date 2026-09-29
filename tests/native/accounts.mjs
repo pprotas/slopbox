@@ -30,11 +30,10 @@ const server = createServer((request, response) => {
   }
 });
 try {
-  for (const path of ["first", "unrelated/second", "home", "data", "config/slopbox", "pi/dist"]) {
+  for (const path of ["first", "unrelated/second", "home", "data", "config/slopbox"]) {
     mkdirSync(join(root, path), { recursive: true, mode: 0o700 });
   }
-  writeFileSync(join(root, "pi/package.json"), '{"name":"@earendil-works/pi-coding-agent","type":"module"}');
-  writeFileSync(join(root, "pi/dist/cli.js"), readFileSync(new URL("./accounts-harness.mjs", import.meta.url)));
+
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   writeFileSync(config, `
@@ -42,9 +41,8 @@ try {
 harness = "none"
 network = "none"
 credentials = "none"
-[macos]
-node = ${JSON.stringify(process.execPath)}
-pi_cli = ${JSON.stringify(join(root, "pi/dist/cli.js"))}
+[runtime]
+executables = ${JSON.stringify([process.execPath, "/usr/bin/curl"])}
 [defaults]
 accounts = ["forge"]
 [secrets.forge]
@@ -67,7 +65,8 @@ authentication = { type = "bearer", secret = "forge" }
       cwd: workspace,
       env: { HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"),
         PATH: "/usr/bin:/bin", ACCOUNT_FIXTURE_TOKEN: token,
-        SLOPBOX_TEST_SLOPBOX: slopbox, SLOPBOX_TEST_ACCOUNT: `127.0.0.1:${server.address().port}` },
+        SLOPBOX_TEST_SLOPBOX: slopbox, SLOPBOX_TEST_ACCOUNT: `127.0.0.1:${server.address().port}`,
+        SLOPBOX_TEST_NATIVE_ARGS: JSON.stringify(["run", "--workspace", workspace, "--dev-env", "none", "--", process.execPath, "accounts-probe.mjs"]) },
       stdio: ["ignore", "pipe", "pipe"], timeout: 60000,
     });
     closed = once(child, "close");
@@ -76,7 +75,7 @@ authentication = { type = "bearer", secret = "forge" }
     assert.equal((await closed)[0], 0, log.replaceAll(token, "[REDACTED]"));
     assert.ifError(upstreamError);
   }
-  assert.equal(log.split("native account separation passed").length - 1, 2, log);
+  assert.equal(log.split("native account tools passed").length - 1, 2, log);
   assert(!log.includes(token), "credential leaked into output");
   assert.deepEqual(requests, Array(4).fill("GET /api/reflect"));
   passed = true;

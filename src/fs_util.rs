@@ -1,6 +1,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+#[cfg(any(target_os = "linux", test))]
+use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -48,6 +50,7 @@ pub(crate) fn write_private(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn find_socket(root: &Path) -> Result<Option<PathBuf>> {
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {

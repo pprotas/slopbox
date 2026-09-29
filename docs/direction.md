@@ -26,7 +26,7 @@ Slopbox must not ship particular harness integrations, including optional built-
 
 Slopbox owns the generic execution, resource, role, credential and signing interfaces those integrations consume. An extension can route a tool invocation into a restricted role; Slopbox must enforce that role independently. Extension presence alone is not evidence that every tool path is separated. Requested stronger contracts must fail explicitly when unavailable, not silently fall back to shared authority.
 
-There should be one harness-neutral configuration and launch path, not mutually exclusive Pi and generic modes. The existing embedded Pi extension, Pi preparation and hardcoded Pi launch are migration work to extract, not a precedent for more integrations. Merely moving them into another module in this repository does not satisfy this boundary.
+There should be one harness-neutral configuration and launch path, not mutually exclusive Pi and generic modes. The former embedded Pi extension, preparation and hardcoded launch have been removed. Existing saved setup records remain readable only as restrictive policy ceilings; they do not re-enable the integration. Moving another harness into a core module would violate this boundary.
 
 Compatibility fixtures may exercise real harnesses and separately supplied integrations. They must not become production adapters or prerequisites for ordinary command execution. Preserve the existing enforcement guarantees and regression evidence during extraction.
 

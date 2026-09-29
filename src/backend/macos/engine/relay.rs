@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::job::{Job, connect_worker};
-use super::supervisor::path_text;
+use super::process::path_text;
 
 const NAMES: [&CStr; 3] = [c"General", c"Model", c"Account"];
 const MAX_CONNECTIONS: usize = 32;

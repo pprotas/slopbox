@@ -20,7 +20,7 @@ use crate::http::{
     BufferedRequest, contains_bytes, copy_redacting_many, parse_request_line, read_request_header,
     read_retry, resolve_public, send_simple_response,
 };
-use crate::provider::{Kind, Providers};
+use crate::provider::Providers;
 mod tls;
 
 const GENERAL_PROXY_PORT: u16 = 39_080;
@@ -37,7 +37,6 @@ pub struct GatewaySession {
     direct_http_socket_path: Option<PathBuf>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
-    providers: Vec<Kind>,
     account_ca: Option<String>,
 }
 
@@ -341,7 +340,6 @@ impl GatewaySession {
         active_lock.lock()?;
 
         let providers = Arc::new(Providers::discover()?);
-        let available_providers = providers.available();
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let loop_config = GatewayLoopConfig {
@@ -370,7 +368,6 @@ impl GatewaySession {
             direct_http_socket_path,
             stop,
             thread: Some(thread),
-            providers: available_providers,
             account_ca,
         })
     }
@@ -401,10 +398,6 @@ impl GatewaySession {
 
     pub fn authenticated_http_proxy_port(&self) -> u16 {
         AUTHENTICATED_HTTP_PROXY_PORT
-    }
-
-    pub fn providers(&self) -> &[Kind] {
-        &self.providers
     }
 
     pub fn account_ca(&self) -> Option<&str> {

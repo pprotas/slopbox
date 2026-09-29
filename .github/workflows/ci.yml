@@ -1,10 +1,7 @@
 name: CI
 
+# Run private-repository CI only when explicitly dispatched.
 on:
-  push:
-    branches: ["**"]
-    tags: ["v*"]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -33,7 +30,7 @@ jobs:
             experimental-features = nix-command flakes
       - run: nix develop --command cargo fmt --check
       - run: nix develop --command cargo fmt --manifest-path tests/macos-seatbelt/Cargo.toml --check
-      - run: nix develop --command nixfmt --check flake.nix tests/nixos.nix tests/native/nix/flake.nix
+      - run: nix develop --command nixfmt --check flake.nix tests/nixos.nix
       - run: nix develop --command cargo test --locked
       - run: nix develop --command cargo test --locked gateway::tls -- --include-ignored
       - name: Read-only GitHub CLI configuration

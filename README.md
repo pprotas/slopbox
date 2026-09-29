@@ -1,30 +1,16 @@
 # Slopbox
 
-Slopbox runs coding agents with explicit access to project files, tools, networks, and external accounts. It keeps host credentials outside the agent and records network access that needs human approval.
+Slopbox runs selected development commands in a project sandbox. It keeps host credentials and signing keys outside the sandbox, mediates configured accounts, and denies unapproved network destinations. [Security guarantees and limits](SECURITY-MODEL.md) matter before using it with untrusted code.
 
-The current alpha supports Nix-backed Linux with Pi, using native `developer` and `contained` profiles, tested on NixOS and [Ubuntu with Nix](docs/poc-linux-runtime.md). An opt-in [Nix-free Linux runtime](docs/poc-nixless-linux.md) runs selected ELF executables and scripts, with explicit [application bundles](docs/poc-runtime-bundles.md) for plugins and package data. Unmodified Aider and [headless Claude Code](docs/poc-claude-code.md) have local fixture coverage; automatic harness/tool separation is not provided. The [experimental native macOS launcher](docs/macos.md) supports Pi/Node with separate shell enforcement and [generic selected commands](docs/poc-native-runtime.md) with application bundles and Mach-O dependency discovery. Unmodified Pi and Claude have local generic-runtime acceptance. It does not provide the full Linux feature set. Each backend must independently satisfy its declared security contract.
+The Linux backend uses bubblewrap and requires working user namespaces. It supports a Nix-backed runtime or explicitly selected ELF/script executables and read-only application bundles. The experimental native Apple-silicon macOS backend uses Seatbelt and explicitly selected executables, Mach-O dependencies and bundles. Both backends share the host kernel. Unsupported policy combinations fail closed; no unsandboxed fallback exists.
 
-## What it does
+Slopbox does not embed or configure a coding harness. Pi, Claude Code, and other applications can run as ordinary selected commands if their resources are explicitly granted. Their subprocesses inherit the application's attached account and model authority. **There is no automatic harness/tool separation.** On Linux, a cooperative external integration can explicitly call `slopbox tool-run` for an inner sandbox; generic commands do not do this automatically. macOS has no generic inner tool role. See [project direction](docs/direction.md).
 
-A Slopbox session can provide:
+## Install and run
 
-- a short first-run setup and saved host-owned project policy;
-- live, read-only, or staged access to one project;
-- a private home and package caches;
-- concurrent sessions with per-run generated configuration and shared project history;
-- a Nix runtime or explicitly selected Linux executable dependencies;
-- deny-by-default HTTP and HTTPS networking;
-- host-approved session and project destinations;
-- fixed authenticated routes whose real credentials never enter the sandbox;
-- separate model and tool network capabilities;
-- sandbox-only Git remote URL rewriting, explicit identity, and host-brokered SSH commit signing;
-- trusted, data-only, or absent Pi resources.
+Build with Rust using `cargo build --locked --release`, or on a supported Nix system use `nix build`. On Apple Silicon, the published 0.2.0 Homebrew formula is available from `pprotas/tap` (it predates the removal of the built-in Pi launcher). macOS also builds with Cargo; see [platform notes](docs/platforms.md).
 
-The Linux backend uses bubblewrap and shares the host kernel. It is intended for mistakes, prompt injection, and ordinary malicious userspace—not kernel exploits. See [SECURITY-MODEL.md](SECURITY-MODEL.md) for precise guarantees and limitations.
-
-## Generic commands
-
-Configure selected tools in the host's `~/.config/slopbox/config.toml`:
+Define host-owned defaults in `~/.config/slopbox/config.toml`:
 
 ```toml
 default_command = ["bash"]
@@ -34,93 +20,31 @@ harness = "none"
 credentials = "none"
 
 [runtime]
-executables = ["bash", "cat", "ls"]
+executables = ["bash", "cat", "git"]
 ```
 
-Then use `slopbox` for the configured command or `slopbox run -- COMMAND` for another selected tool. No Pi setup is required, and selected runtimes do not implicitly activate project flakes. Host-configured guest environment values can refer to public broker endpoints and private session paths. macOS account secrets can come directly from Keychain; they remain host-side. See [configuration](docs/configuration.md#command-launch) and [native runtime limits](docs/poc-native-runtime.md).
-
-## Legacy Pi development setup
+Use `slopbox` for the default command, `slopbox -- ARGS` to append arguments, or `slopbox run --dev-env none -- COMMAND` for an explicit selected command. Without a default command, bare `slopbox` asks you to configure one or use `run`; it never starts Pi implicitly. Runtime selections, account routes, identity and signing permissions come only from host configuration. A repository's `.slopbox.toml` can narrow policy, not grant host resources. Existing saved project-policy ceilings remain enforced after upgrading from the built-in Pi launcher; there is no automatic reset or migration that expands access.
 
 ```bash
-nix develop
-cargo test
-nix develop -c cargo run
+slopbox status --verbose      # inspect effective access without resolving secrets
+slopbox doctor                # check launch prerequisites
+slopbox network events        # inspect denied destinations on the host
+slopbox network approve ID    # approve a live-session request
+slopbox stage list            # inspect retained staged workspaces
 ```
 
-Without a configured default command or selected runtime, the legacy launch starts Pi in the current project. First run asks how changes should work and confirms access. Use `slopbox init` to reconfigure, or `slopbox -- --continue` to resume Pi.
-
-Inspect the effective policy without starting an agent:
-
-```bash
-nix run . -- status
-nix run . -- status --profile contained --verbose
-```
-
-Check launch prerequisites without starting Pi or evaluating project code:
-
-```bash
-nix run . -- doctor
-```
-
-On Wayland, **Ctrl+V** in Pi imports a clipboard image through the host and pastes its sandbox-local path without submitting. No desktop sockets are exposed. Use the terminal's normal paste shortcut for text. See [clipboard limits](docs/configuration.md#clipboard-images-on-wayland).
-
-Try the experimental in-session approval view with `slopbox --approval-view` (or `nix run . -- --approval-view`). Press **Ctrl-]** to inspect denials, approve a destination, or revoke a rule. Approval input stays on the host; the view never retries an operation. See [usage and limitations](docs/configuration.md#host-approval-view-prototype).
-
-The separate host CLI remains available:
-
-```bash
-nix run . -- network events
-nix run . -- network approve <request-id>             # this session
-nix run . -- network approve <request-id> --project   # persistent
-nix run . -- network approvals
-nix run . -- network revoke <rule-id>
-```
-
-Staged workspaces are managed from the host:
-
-```bash
-nix run . -- stage list
-nix run . -- stage diff <stage-id>
-nix run . -- stage apply <stage-id>
-nix run . -- stage discard <stage-id>
-```
-
-[Shared host defaults and directory rules](docs/configuration.md#shared-host-defaults-and-directory-rules) select reusable identities and accounts without repository configuration. Opt-in account TLS mediation supports ordinary HTTPS clients using an explicit proxy and session CA; see [POC scope](docs/poc-generic-capabilities.md).
-
-Add `git_urls` to an authenticated route to use ordinary Git commands through the broker without changing `.git/config`; see [configuration](docs/configuration.md#git-smart-http).
-
-The basic `cd project && slopbox` workflow and revocable network rules are implemented for Pi. The host approval view remains opt-in; native approval and actual-Pi terminal fixtures have passed on Apple Silicon/macOS 27. Broader runtime/resource discovery, macOS tooling and additional harness/provider integrations remain planned.
-
-## Documentation
-
-- **[Project direction — authoritative](docs/direction.md):** general-purpose isolation, integration boundaries, global configuration, and development priorities. Supersedes conflicting older plans.
-- [Concepts](docs/concepts.md): identities, accounts, harnesses, projects, sessions, profiles, and grants.
-- [User experience](docs/experience.md): the intended launch, approval, recovery, and review workflow.
-- [Configuration](docs/configuration.md): current host and project configuration.
-- [Architecture](docs/architecture.md): existing backend, harness, and provider boundaries and earlier refactor plans.
-- [Platforms](docs/platforms.md): Linux, native macOS/Seatbelt, and VM backend plans.
-- [Mac handoff](docs/macos-handoff.md): checkpoint history, validation and next steps for a new Pi session.
-- [Integrations](docs/integrations.md): Claude Code, Codex CLI, OpenCode, Bedrock/SSO, and Copilot targets.
-- [Roadmap](docs/roadmap.md): focused implementation priorities.
-- [Security model](SECURITY-MODEL.md): current enforcement, trust boundaries, and known gaps.
+See [configuration](docs/configuration.md) for selected runtimes, persistent private application state, HTTPS account mediation, Git URL rewriting and host-side SSH commit signing. `network = "none"` disables general egress but **not** separately attached account routes; `credentials = "none"` disables fixed model routes but not accounts or signing. A staged or read-only workspace does not restrict attached account authority.
 
 ## Development
 
 ```bash
-nix develop
-cargo fmt --check
-nixfmt --check flake.nix tests/nixos.nix tests/native/nix/flake.nix
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+nixfmt --check flake.nix tests/nixos.nix
 nix build
-nix flake check
-nix run .#e2e
 ```
 
-`nix run .#e2e` runs directly on Nix-backed Linux and requires working outer/nested user namespaces. The app supplies its test tools, including Pi. It validates direct and contained runtime paths, with either single-user Nix or a daemon, without making a model request. CI has separate Ubuntu-host and NixOS-VM jobs; the latter requires KVM. The Nix-free job instead builds with distro tools and runs `tests/linux-nixless.py`, `tests/linux-bundles.py` and the pinned Aider fixture `tests/linux-harness.py` on a host without `/nix`. See [bundle test preparation](docs/poc-runtime-bundles.md#validation).
+On Nix-backed Linux, `nix run .#e2e` tests native containment with synthetic credentials and no model charges. `tests/linux-nixless.py` and `tests/linux-bundles.py` exercise a host without Nix. Native macOS integration fixtures are opt-in and require explicit paths to a built Slopbox binary and reviewed tools. CI runs only on manual dispatch while the repository is private.
 
-With direnv/nix-direnv configured on the host, review `.envrc` and run `direnv allow` to activate the development shell automatically.
-
-The flake exports packages and development shells for `x86_64-linux`, `aarch64-linux` and Apple Silicon `aarch64-darwin`. macOS can also build directly with Cargo; see [native setup, Nix validation and limits](docs/macos.md) and [enforcement results](docs/macos-spike.md). Native project dev shells activate only in sandboxed tools; entering the host Nix shell does not import its environment into Slopbox. See the native guide for validation results and trust boundaries.
-
-Slopbox is experimental. Profiles are contracts: unsupported combinations fail rather than silently weakening isolation.
+The software is experimental and licensed under [MIT](LICENSE). Historical POC documents record earlier behavior, including a now-removed embedded Pi integration; they are not current feature claims. The [project direction](docs/direction.md) and [security model](SECURITY-MODEL.md) take precedence.

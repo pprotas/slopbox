@@ -2,11 +2,9 @@ use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use super::job::{Job, boot_uuid, lock, private_directory};
 use super::relay::{Lease, Ports, Routes};
-use super::supervisor::{MAX_OUTPUT, MAX_REQUEST, Supervisor, path_text};
 
 pub struct Role {
     pub profile: String,
@@ -17,7 +15,6 @@ pub struct Role {
 pub struct Session {
     directory: PathBuf,
     executable: PathBuf,
-    tools: Option<Supervisor>,
     lease: Option<Lease>,
     finished: bool,
     _lock: File,
@@ -36,7 +33,6 @@ impl Session {
         let mut session = Self {
             executable,
             directory,
-            tools: None,
             lease: None,
             finished: false,
             _lock: lock,
@@ -69,48 +65,6 @@ impl Session {
             .ok_or_else(|| io::Error::other("session is stopped"))
     }
 
-    pub fn tool_socket(&self) -> PathBuf {
-        self.directory.join("tool.sock")
-    }
-
-    pub fn start_tools(&mut self, role: Role) -> io::Result<()> {
-        if self.tools.is_some() || self.lease.is_none() {
-            return Err(io::Error::other("invalid native tool supervisor state"));
-        }
-        self.tools = Some(Supervisor::start_in(
-            self.executable.clone(),
-            self.tool_socket(),
-            self.directory.join("tasks"),
-            role.profile,
-            role.workspace,
-            role.home,
-        )?);
-        Ok(())
-    }
-
-    pub fn start_tools_configured(
-        &mut self,
-        role: Role,
-        environment: &[String],
-        timeout: Duration,
-        command_prefix: Vec<String>,
-    ) -> io::Result<()> {
-        if self.tools.is_some() || self.lease.is_none() {
-            return Err(io::Error::other("invalid tool supervisor state"));
-        }
-        let environment = self.write_environment("tool.env", environment)?;
-        self.tools = Some(Supervisor::start_configured(
-            self.executable.clone(),
-            self.tool_socket(),
-            self.directory.join("tasks"),
-            role,
-            Some(environment),
-            timeout,
-            command_prefix,
-        )?);
-        Ok(())
-    }
-
     pub fn command(
         &self,
         role: &Role,
@@ -120,7 +74,7 @@ impl Session {
         if self.lease.is_none() {
             return Err(io::Error::other("session is stopped"));
         }
-        let environment = self.write_environment("harness.env", environment)?;
+        let environment = self.write_environment("command.env", environment)?;
         super::stdio::command(
             &self.executable,
             &self.directory.join("tasks"),
@@ -148,71 +102,12 @@ impl Session {
         Ok(path)
     }
 
-    pub fn run_harness(&self, role: &Role, arguments: &[String]) -> io::Result<(i32, Vec<u8>)> {
-        if self.lease.is_none()
-            || arguments.is_empty()
-            || arguments.len() > 32
-            || !arguments[0].starts_with('/')
-            || arguments.iter().any(|argument| argument.contains('\0'))
-        {
-            return Err(io::Error::other("invalid native harness request"));
-        }
-        let body = format!("{}\0", arguments.join("\0"));
-        if body.len() > MAX_REQUEST {
-            return Err(io::Error::other("harness request too large"));
-        }
-        let (mut job, mut stream) = Job::start(
-            &self.executable,
-            &self.directory.join("tasks"),
-            "__macos-exec-worker",
-            &[
-                role.profile.clone(),
-                path_text(&role.workspace)?,
-                path_text(&role.home)?,
-                "30".into(),
-            ],
-            &[],
-        )?;
-        stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(Duration::from_secs(35)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-        stream.write_all(&(body.len() as u32).to_be_bytes())?;
-        stream.write_all(body.as_bytes())?;
-        let mut size = [0; 4];
-        stream.read_exact(&mut size)?;
-        let size = u32::from_be_bytes(size) as usize;
-        if size == 0 || size > MAX_OUTPUT + 32 {
-            return Err(io::Error::other("invalid harness response size"));
-        }
-        let mut bytes = vec![0; size];
-        stream.read_exact(&mut bytes)?;
-        let separator = bytes
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .ok_or_else(|| io::Error::other("invalid harness response"))?;
-        let status = std::str::from_utf8(&bytes[..separator])
-            .map_err(io::Error::other)?
-            .parse()
-            .map_err(io::Error::other)?;
-        drop(stream);
-        job.finish()?;
-        Ok((status, bytes[separator + 1..].to_vec()))
-    }
-
-    pub fn revoke(&mut self) -> io::Result<()> {
-        self.lease
-            .as_mut()
-            .ok_or_else(|| io::Error::other("session is stopped"))?
-            .revoke()
-    }
-
     pub fn finish(&mut self) -> io::Result<()> {
         if self.finished {
             return Ok(());
         }
         // Closing the controller stops forwarding but deliberately retains the leases.
         self.lease.take();
-        self.tools.take();
         recover_contents(&self.directory)?;
         self.finished = true;
         Ok(())

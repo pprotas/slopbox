@@ -56,7 +56,6 @@
                     pkgs.bubblewrap
                     pkgs.coreutils
                     pkgs.diffutils
-                    pkgs.wl-clipboard
                   ]
                 }
             '';
@@ -117,7 +116,6 @@
               nodejs
               openssh
               openssl
-              pi-coding-agent
               ripgrep
               util-linux
             ];
@@ -158,7 +156,6 @@
               ]
               ++ lib.optionals stdenv.hostPlatform.isLinux [
                 bubblewrap
-                wl-clipboard
               ];
           };
         }

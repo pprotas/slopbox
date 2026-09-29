@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail, ensure};
-use serde::Deserialize;
 
 use super::{BrokerConnections, ExecutionPlan};
 use crate::policy::{Policy, RuntimeMode, WorkspaceMode};
@@ -16,117 +15,31 @@ pub(crate) mod engine;
 mod profile;
 pub(crate) mod runtime;
 
-#[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Config {
-    pub node: PathBuf,
-    pub pi_cli: PathBuf,
-    #[serde(default = "tool_timeout")]
-    pub tool_timeout_seconds: u64,
-}
-
-fn tool_timeout() -> u64 {
-    120
-}
-
-impl Config {
-    pub fn resolve(&self) -> Result<Self> {
-        ensure!(
-            self.node.is_absolute() && self.pi_cli.is_absolute(),
-            "macos.node and macos.pi_cli must be absolute host-selected paths"
-        );
-        let node = self.node.canonicalize().context("resolve macos.node")?;
-        let pi_cli = self.pi_cli.canonicalize().context("resolve macos.pi_cli")?;
-        ensure!(
-            node.is_file() && node.metadata()?.mode() & 0o111 != 0,
-            "macos.node must be an executable file"
-        );
-        ensure!(
-            pi_cli.is_file() && pi_cli.ends_with("dist/cli.js"),
-            "macos.pi_cli must select Pi's dist/cli.js"
-        );
-        let package = pi_cli.parent().unwrap().parent().unwrap();
-        let manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(package.join("package.json"))?)?;
-        ensure!(
-            manifest["name"] == "@earendil-works/pi-coding-agent",
-            "macos.pi_cli is not the selected Pi package"
-        );
-
-        ensure!(
-            (1..=3600).contains(&self.tool_timeout_seconds),
-            "macos.tool_timeout_seconds must be 1..=3600"
-        );
-        Ok(Self {
-            node,
-            pi_cli,
-            tool_timeout_seconds: self.tool_timeout_seconds,
-        })
-    }
-}
-
 pub(crate) fn unavailable<T>() -> Result<T> {
-    bail!(
-        "native macOS launch is not enabled through Linux init entry points; use the native Pi launcher described in docs/macos.md (no unsandboxed fallback)"
-    )
+    bail!("native macOS does not use the Linux sandbox initializer (no unsandboxed fallback)")
 }
 
 pub(crate) fn ensure_supported() -> Result<()> {
-    let (pi, selected) = crate::session::macos_config()?;
+    let selected = crate::session::macos_config()?;
     ensure!(
-        pi.is_some() || selected.is_some(),
-        "native macOS launch is not enabled: configure host [runtime] executables or macos.node and macos.pi_cli; see docs/macos.md (no unsandboxed fallback)"
+        selected.is_some(),
+        "native macOS requires host-selected [runtime] resources; no unsandboxed fallback"
     );
     Ok(())
 }
 
-pub(crate) fn validate(
-    config: Option<&Config>,
-    generic: bool,
-    workspace: &Path,
-    policy: Policy,
-    command: &[OsString],
-    dev_env: crate::DevEnvironment,
-    dry_run: bool,
-) -> Result<()> {
+pub(crate) fn validate(selected: bool, policy: Policy, dry_run: bool) -> Result<()> {
     validate_policy(policy)?;
     ensure!(!dry_run, "native dry-run is not enabled");
-    if generic {
-        ensure!(
-            policy.harness == crate::policy::HarnessMode::None,
-            "generic native commands require harness=none"
-        );
-        return Ok(());
-    }
-    let config = config
-        .context("native Pi runtime is not configured")?
-        .resolve()?;
     ensure!(
-        !config.node.starts_with(workspace)
-            && !config
-                .pi_cli
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .starts_with(workspace),
-        "native harness runtime must be outside the workspace"
+        selected,
+        "native macOS requires host-selected [runtime] resources"
     );
-    validate_policy(policy)?;
-    ensure!(!dry_run, "native dry-run is not enabled");
-    let project_environment = super::nix::enabled(workspace, dev_env)?;
     ensure!(
-        policy.runtime != RuntimeMode::Project || project_environment,
-        "runtime=project requires an activated flake development environment"
+        policy.harness == crate::policy::HarnessMode::None,
+        "generic native commands require harness=none"
     );
-    if project_environment {
-        crate::command::trusted_executable("nix", workspace)?;
-    }
-    ensure!(
-        command.first().is_some_and(|value| value == "pi"),
-        "native launch currently supports only Pi"
-    );
-    crate::harness::pi::validate_native_arguments(&command[1..])
+    Ok(())
 }
 
 pub(crate) fn validate_policy(policy: Policy) -> Result<()> {
@@ -142,19 +55,7 @@ pub(crate) fn validate_policy(policy: Policy) -> Result<()> {
 }
 
 pub(crate) fn sandbox_path() -> Result<OsString> {
-    let (config, selected) = crate::session::macos_config()?;
-    if selected.is_some() {
-        return Ok("/usr/bin:/bin".into());
-    }
-    let config = config
-        .context("native runtime is not configured")?
-        .resolve()?;
-    std::env::join_paths([
-        config.node.parent().unwrap(),
-        Path::new("/usr/bin"),
-        Path::new("/bin"),
-    ])
-    .context("construct native harness PATH")
+    Ok("/usr/bin:/bin".into())
 }
 
 pub(crate) fn required_executor(_path: &OsStr) -> Result<PathBuf> {
@@ -313,216 +214,93 @@ impl Session {
         self.directory.join("worker")
     }
 
-    pub fn directory(&self) -> &Path {
-        &self.directory
-    }
-
     pub fn command(
         &mut self,
         plan: &ExecutionPlan<'_>,
         child: &[OsString],
     ) -> Result<(engine::job::Job, Command)> {
         ensure!(
-            plan.workspace.source == plan.workspace.target && !plan.clipboard,
+            plan.workspace.source == plan.workspace.target,
             "unsupported native execution plan"
         );
-        let socket = self.engine.tool_socket();
         let executable = self.executable();
-        let role = |tool| -> Result<engine::session::Role> {
-            Ok(engine::session::Role {
-                profile: profile::render(plan, tool, &socket, &executable)?,
-                workspace: plan.workspace.source.to_owned(),
-                home: if tool {
-                    plan.tool_home
-                } else {
-                    plan.private_home
-                }
-                .to_owned(),
-            })
+        let role = engine::session::Role {
+            profile: profile::render(plan, &executable)?,
+            workspace: plan.workspace.source.to_owned(),
+            home: plan.private_home.to_owned(),
         };
-        let generic = plan.runtime.native.config.is_none();
-        let environment = |tool: bool| -> Result<Vec<String>> {
-            let mut values = vec![format!(
-                "PATH={}",
-                plan.runtime
-                    .path
-                    .to_str()
-                    .context("native PATH is not UTF-8")?
-            )];
-            if tool {
-                values = plan.runtime.native.tools.environment(plan.tool_cache)?;
-            }
-            values.extend([
-                "NO_PROXY=127.0.0.1,localhost,::1".into(),
-                "no_proxy=127.0.0.1,localhost,::1".into(),
-                "SHELL=/bin/bash".into(),
-                "SLOPBOX_SANDBOX=1".into(),
-            ]);
-            if generic {
-                values.push("GIT_CONFIG_NOSYSTEM=1".into());
-            }
-            let gitconfig = plan.session_dir.join("gitconfig");
-            if gitconfig.is_file() {
-                values.retain(|value| {
-                    !value.starts_with("GIT_CONFIG_GLOBAL=")
-                        && !value.starts_with("GIT_CONFIG_NOSYSTEM=")
-                });
-                values.extend([
-                    "GIT_CONFIG_NOSYSTEM=1".into(),
-                    format!(
-                        "GIT_CONFIG_GLOBAL={}",
-                        gitconfig.to_str().context("invalid Git config path")?
-                    ),
-                ]);
-            }
-            for (name, value) in plan.environment.iter().chain(if tool {
-                &[][..]
-            } else {
-                &plan.harness.environment
-            }) {
-                let name = name.to_str().context("invalid environment name")?;
-                if name == "SLOPBOX_ACCOUNT_CA" {
-                    if tool || generic {
-                        let endpoint = plan
-                            .brokers
-                            .authenticated_http
-                            .as_ref()
-                            .context("account TLS broker is unavailable")?;
-                        values.extend([
-                            format!(
-                                "SLOPBOX_ACCOUNT_CA={}",
-                                value.to_str().context("invalid account trust path")?
-                            ),
-                            format!("SLOPBOX_ACCOUNT_PROXY=http://127.0.0.1:{}", endpoint.port),
-                        ]);
-                    }
-                    continue;
-                }
-                if name == "SLOPBOX_GITHUB_CONFIG" {
-                    if tool || generic {
-                        for (name, value) in crate::github::environment(Path::new(value)) {
-                            values.push(format!(
-                                "{}={}",
-                                name.to_str().context("invalid GitHub environment name")?,
-                                value.to_str().context("invalid GitHub environment value")?
-                            ));
-                        }
-                    }
-                    continue;
-                }
-                if tool
-                    && (name.starts_with("SLOPBOX_MODEL")
-                        || (matches!(
-                            name,
-                            "HTTP_PROXY"
-                                | "HTTPS_PROXY"
-                                | "http_proxy"
-                                | "https_proxy"
-                                | "SLOPBOX_PROXY_PORT"
-                        ) && !plan.harness.environment.iter().any(|(key, value)| {
-                            key == "SLOPBOX_PI_TOOL_NETWORK" && value == "general"
-                        })))
-                {
-                    continue;
-                }
-                values.push(format!(
-                    "{name}={}",
-                    value.to_str().context("invalid environment value")?
-                ));
-            }
-            Ok(values)
-        };
-        if generic {
-            let temporary = plan.session_dir.join("tmp");
-            fs::DirBuilder::new().mode(0o700).create(&temporary)?;
-            let mut values = environment(false)?;
-            values.push(format!("TMPDIR={}", temporary.display()));
-            values.extend(["USER=slopbox".into(), "LOGNAME=slopbox".into()]);
-            values.push(format!(
-                "TERM={}",
-                std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into())
-            ));
-            let arguments = std::iter::once(OsString::from("/usr/bin/env"))
-                .chain(child.iter().cloned())
-                .map(|value| {
-                    value
-                        .to_str()
-                        .map(str::to_owned)
-                        .context("native command arguments must be UTF-8")
-                })
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(self.engine.command(&role(false)?, &values, &arguments)?);
-        }
-        let config = plan
-            .runtime
-            .native
-            .config
-            .as_ref()
-            .context("missing Pi runtime")?;
-        let activation = match plan.dev_environment {
-            Some(environment) => vec![
-                environment
-                    .bash
-                    .to_str()
-                    .context("invalid Nix Bash path")?
-                    .to_owned(),
-                "--noprofile".into(),
-                "--norc".into(),
-                environment
-                    .script
-                    .to_str()
-                    .context("invalid Nix activation path")?
-                    .to_owned(),
-            ],
-            None => Vec::new(),
-        };
-        self.engine.start_tools_configured(
-            role(true)?,
-            &environment(true)?,
-            std::time::Duration::from_secs(config.tool_timeout_seconds),
-            activation,
-        )?;
-        let mut harness_environment = environment(false)?;
-        harness_environment.extend([
-            format!(
-                "SLOPBOX_NATIVE_SOCKET={}",
-                self.engine.tool_socket().display()
-            ),
-            format!(
-                "SLOPBOX_NATIVE_WORKSPACE={}",
-                plan.workspace.source.display()
-            ),
-            format!("SLOPBOX_NATIVE_TIMEOUT={}", config.tool_timeout_seconds + 5),
-            format!(
-                "TERM={}",
-                std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into())
-            ),
-        ]);
-        if let Ok(value) = std::env::var("COLORTERM") {
-            harness_environment.push(format!("COLORTERM={value}"));
-        }
-        let mut arguments = vec![
-            "/bin/bash".into(),
-            plan.session_dir
-                .join("pi-wrapper")
+        let mut values = vec![format!(
+            "PATH={}",
+            plan.runtime
+                .path
                 .to_str()
-                .context("invalid wrapper path")?
-                .into(),
-        ];
-        arguments.extend(
-            child[1..]
-                .iter()
-                .map(|value| {
-                    value
-                        .to_str()
-                        .map(str::to_owned)
-                        .context("invalid Pi argument")
-                })
-                .collect::<Result<Vec<_>>>()?,
-        );
-        Ok(self
-            .engine
-            .command(&role(false)?, &harness_environment, &arguments)?)
+                .context("native PATH is not UTF-8")?
+        )];
+        values.extend([
+            "NO_PROXY=127.0.0.1,localhost,::1".into(),
+            "no_proxy=127.0.0.1,localhost,::1".into(),
+            "SHELL=/bin/bash".into(),
+            "SLOPBOX_SANDBOX=1".into(),
+            "GIT_CONFIG_NOSYSTEM=1".into(),
+        ]);
+        let gitconfig = plan.session_dir.join("gitconfig");
+        if gitconfig.is_file() {
+            values.push(format!(
+                "GIT_CONFIG_GLOBAL={}",
+                gitconfig.to_str().context("invalid Git config path")?
+            ));
+        }
+        for (name, value) in plan.environment {
+            let name = name.to_str().context("invalid environment name")?;
+            if name == "SLOPBOX_ACCOUNT_CA" {
+                let endpoint = plan
+                    .brokers
+                    .authenticated_http
+                    .as_ref()
+                    .context("account TLS broker is unavailable")?;
+                values.push(format!(
+                    "SLOPBOX_ACCOUNT_CA={}",
+                    value.to_str().context("invalid account trust path")?
+                ));
+                values.push(format!(
+                    "SLOPBOX_ACCOUNT_PROXY=http://127.0.0.1:{}",
+                    endpoint.port
+                ));
+                continue;
+            }
+            if name == "SLOPBOX_GITHUB_CONFIG" {
+                for (name, value) in crate::github::environment(Path::new(value)) {
+                    values.push(format!(
+                        "{}={}",
+                        name.to_str().context("invalid GitHub environment name")?,
+                        value.to_str().context("invalid GitHub environment value")?
+                    ));
+                }
+                continue;
+            }
+            values.push(format!(
+                "{name}={}",
+                value.to_str().context("invalid environment value")?
+            ));
+        }
+        let temporary = plan.session_dir.join("tmp");
+        fs::DirBuilder::new().mode(0o700).create(&temporary)?;
+        values.push(format!("TMPDIR={}", temporary.display()));
+        values.extend(["USER=slopbox".into(), "LOGNAME=slopbox".into()]);
+        values.push(format!(
+            "TERM={}",
+            std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into())
+        ));
+        let arguments = std::iter::once(OsString::from("/usr/bin/env"))
+            .chain(child.iter().cloned())
+            .map(|value| {
+                value
+                    .to_str()
+                    .map(str::to_owned)
+                    .context("native command arguments must be UTF-8")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self.engine.command(&role, &values, &arguments)?)
     }
 
     pub fn finish(&mut self) -> Result<()> {
@@ -597,62 +375,17 @@ pub(crate) mod diagnostics {
             return;
         }
         checks.push((
-            "Native backend",
-            (|| {
-                ensure_supported()?;
-                let config = crate::session::macos_config()?.0
-                    .context("missing native runtime")?
-                    .resolve()?;
-                ensure!(
-                    !config.node.starts_with(workspace)
-                        && !config
-                            .pi_cli
-                            .parent()
-                            .unwrap()
-                            .parent()
-                            .unwrap()
-                            .starts_with(workspace),
-                    "native harness runtime must be outside the workspace"
-                );
-                validate_policy(policy)?;
-                Ok("experimental Seatbelt / launchd; explicit Node and Pi paths checked; toolchain execution not tested".into())
-            })(),
+            "Native executable runtime",
+            Err(anyhow::anyhow!(
+                "configure host-selected [runtime] executables"
+            )),
         ));
-        checks.push((
-            "Project environment",
-            (|| {
-                let flake = super::super::nix::enabled(workspace, crate::DevEnvironment::Auto)?;
-                ensure!(
-                    policy.runtime != RuntimeMode::Project || flake,
-                    "runtime=project requires flake.nix"
-                );
-                if flake {
-                    let nix = crate::command::trusted_executable("nix", workspace)?;
-                    Ok(format!(
-                        "Nix at {}; project not evaluated, closure not checked",
-                        nix.display()
-                    ))
-                } else {
-                    Ok("no project flake; using host runtime tools".into())
-                }
-            })(),
-        ));
-        notes.push("Native launch is experimental; selected project closures or recognized developer installations are read-only and tool-only; arbitrary PATH roots and host tool configuration are not imported; configured Git identity and account routes are brokered; --approval-view enables host network approvals in a foreground terminal; clipboard is not enabled.".into());
     }
-    pub(crate) fn runtime_description(mode: RuntimeMode) -> &'static str {
-        match mode {
-            RuntimeMode::Project => "Host-selected Node/Pi; selected Nix closure for tools only",
-            _ => {
-                "Host-selected Node/Pi; recognized host tools, with project Nix tools first when activated"
-            }
-        }
+    pub(crate) fn runtime_description(_mode: RuntimeMode) -> &'static str {
+        "No native executable runtime selected"
     }
-    pub(crate) fn environment_description(workspace: &Path) -> &'static str {
-        if workspace.join("flake.nix").is_file() {
-            "Project flake realized on the host; activation/hooks run only in sandboxed tools"
-        } else {
-            "No project flake; use the selected runtime tools"
-        }
+    pub(crate) fn environment_description(_workspace: &Path) -> &'static str {
+        "No native runtime selected"
     }
 }
 
@@ -662,9 +395,7 @@ pub(crate) mod tool {
         _network: crate::ToolNetwork,
         _command: &[OsString],
     ) -> Result<std::process::ExitStatus> {
-        bail!(
-            "native macOS launch is not enabled through tool-run; Pi uses the session-owned supervisor"
-        )
+        bail!("native macOS tool-run is not implemented; no restricted tool role is available")
     }
 }
 pub(crate) mod init {

@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs::{self, DirBuilder, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -14,24 +14,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-use crate::backend::native::runtime::{prepare_dev_environment, prepare_runtime};
+use crate::DevEnvironment;
+#[cfg(target_os = "linux")]
+use crate::backend::native::runtime::prepare_dev_environment;
+use crate::backend::native::runtime::prepare_runtime;
 use crate::backend::native::{
     self, clone_or_copy_file, required_executor, sandbox_path, validate_workspace_contents,
 };
 use crate::backend::{self, BrokerConnections, ExecutionPlan, ProxyEndpoint, Workspace};
-#[cfg(target_os = "linux")]
-use crate::command::find_optional_executable;
 use crate::command::shell_quote;
 use crate::fs_util::{expand_host_home, read_text, write_private};
 use crate::gateway::{AuthenticatedHttpRoute, GatewaySession, HttpAuthentication};
 use crate::git_config::GitUrlRewrite;
 use crate::git_signing::{GitSigningIdentity, GitSigningSession};
-use crate::harness::{PrepareContext, pi};
-use crate::launch::{Agent, LaunchConfig};
+use crate::launch::LaunchConfig;
 use crate::policy::{
     HarnessMode, NetworkMode, Policy, PolicyRequest, Profile, RuntimeMode, WorkspaceMode,
 };
-use crate::{DevEnvironment, ToolNetwork};
 
 mod access;
 
@@ -41,8 +40,6 @@ pub struct RunOptions {
     pub workspace: Option<PathBuf>,
     pub profile: Option<Profile>,
     pub dev_env: DevEnvironment,
-    pub tool_network: ToolNetwork,
-    pub no_host_pi_resources: bool,
     pub command: Vec<OsString>,
     pub dry_run: bool,
     pub approval_view: bool,
@@ -52,14 +49,10 @@ pub struct RunOptions {
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SlopboxConfig {
-    #[cfg(target_os = "macos")]
-    macos: Option<native::Config>,
     #[serde(default)]
     profile: Profile,
     #[serde(default)]
     policy: PolicyRequest,
-    #[serde(default)]
-    pi: pi::Config,
     #[serde(default)]
     runtime: Option<backend::RuntimeSelection>,
     default_command: Option<Vec<String>>,
@@ -145,7 +138,6 @@ struct NetworkPlan {
     general: bool,
     model: bool,
     authenticated_http: bool,
-    tool: ToolNetwork,
 }
 
 struct WorkspaceMount {
@@ -156,7 +148,9 @@ struct WorkspaceMount {
 struct Paths {
     workspace: PathBuf,
     box_root: PathBuf,
+    #[cfg(target_os = "linux")]
     private_home: PathBuf,
+    #[cfg(target_os = "linux")]
     tool_home: PathBuf,
     config_root: PathBuf,
     state_root: PathBuf,
@@ -176,10 +170,6 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     let paths = prepare_paths(options.workspace.as_deref())?;
     validate_workspace(&paths)?;
     let config = load_config(&paths.config_root)?;
-    ensure!(
-        options.launch_config.is_none() || config.runtime.is_none(),
-        "selected executable runtimes cannot replace an integrated Pi launch"
-    );
     let project_config = load_project_config(&paths.workspace)?;
     let launch_config = match options.launch_config {
         Some(config) => Some(config),
@@ -189,7 +179,6 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         &config,
         &project_config,
         options.profile,
-        options.no_host_pi_resources,
         launch_config.as_ref(),
     );
     policy.ensure_implemented(profile)?;
@@ -226,22 +215,8 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         .transpose()?;
     #[cfg(target_os = "macos")]
     {
-        native::validate(
-            config.macos.as_ref(),
-            selected_runtime.is_some(),
-            &paths.workspace,
-            policy,
-            &options.command,
-            dev_env,
-            options.dry_run,
-        )?;
+        native::validate(selected_runtime.is_some(), policy, options.dry_run)?;
     }
-    let host_home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set")?;
-    let pi = pi::Pi::inspect(policy.harness, &host_home, &config.pi)?;
-    #[cfg(target_os = "macos")]
-    pi.validate_native_resources()?;
     for rewrite in &git_rewrites {
         eprintln!(
             "slopbox: Git URL {} uses authenticated route {}",
@@ -270,49 +245,42 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         general: general_network,
         model: policy.credentials == crate::policy::CredentialMode::Brokered,
         authenticated_http: !authenticated_http_routes.is_empty(),
-        tool: if general_network {
-            options.tool_network
-        } else {
-            ToolNetwork::None
-        },
     };
 
     validate_workspace_contents(&paths.workspace)?;
 
     let workspace_mount = prepare_workspace_mount(&paths, policy.workspace, options.dry_run)?;
-    create_private_home(&paths.private_home)?;
-    pi::Pi::initialize_home(&paths.private_home)?;
     #[cfg(target_os = "linux")]
     {
+        create_private_home(&paths.private_home)?;
         create_private_home(&paths.tool_home)?;
-        pi::Pi::initialize_home(&paths.tool_home)?;
     }
     #[cfg(target_os = "macos")]
-    let tool_cache = native::runtime::prepare_tool_cache(&paths.tool_home)?;
+    {
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&paths.box_root)?;
+        let metadata = fs::symlink_metadata(&paths.box_root)?;
+        ensure!(
+            metadata.is_dir()
+                && std::os::unix::fs::MetadataExt::uid(&metadata) == unsafe { libc::getuid() }
+                && metadata.permissions().mode() & 0o077 == 0,
+            "native project state root is not private"
+        );
+    }
     let session_dir = tempfile::Builder::new()
         .prefix("run-")
         .tempdir_in(&paths.box_root)
         .context("failed to create session runtime directory")?;
     #[cfg(target_os = "macos")]
-    let (private_home, tool_home) = (
-        if selected_runtime.is_some() {
-            let home = paths.box_root.join("native-home");
-            native::runtime::prepare_generic_home(&home)?;
-            home
-        } else {
-            session_dir.path().join("home")
-        },
-        session_dir.path().join("tool-home"),
-    );
+    let private_home = {
+        let home = paths.box_root.join("native-home");
+        native::runtime::prepare_generic_home(&home)?;
+        home
+    };
     #[cfg(target_os = "linux")]
     let (private_home, tool_home) = (paths.private_home.clone(), paths.tool_home.clone());
-    #[cfg(target_os = "macos")]
-    {
-        if selected_runtime.is_none() {
-            create_private_home(&private_home)?;
-        }
-        create_private_home(&tool_home)?;
-    }
     #[cfg(target_os = "linux")]
     let dev_environment = if options.dry_run {
         None
@@ -365,9 +333,6 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         let session = native::Session::start(&executor, &mut brokers)?;
         (session, brokers)
     };
-    #[cfg(target_os = "macos")]
-    let dev_environment =
-        prepare_dev_environment(native_session.directory(), &workspace_mount.source, dev_env)?;
     if !options.dry_run && (git_signing.is_some() || !git_rewrites.is_empty()) {
         let broker_base = brokers
             .authenticated_http
@@ -384,67 +349,17 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         )?;
     }
     #[cfg(target_os = "macos")]
-    let generic = config.runtime.is_some();
+    let runtime = prepare_runtime(selected_runtime)?;
     #[cfg(target_os = "linux")]
-    let generic = false;
-    let harness = if generic {
-        crate::harness::PreparedHarness::default()
-    } else {
-        pi.prepare(&PrepareContext {
-            #[cfg(target_os = "macos")]
-            native: config.macos.as_ref(),
-            session_dir: session_dir.path(),
-            private_home: &paths.private_home,
-            host_path: if config.runtime.is_some() {
-                OsStr::new("")
-            } else {
-                &host_path
-            },
-            profile,
-            general_network,
-            tool_network: network.tool,
-            model_providers: if network.model {
-                gateway
-                    .as_ref()
-                    .map(GatewaySession::providers)
-                    .unwrap_or_default()
-            } else {
-                &[]
-            },
-            dry_run: options.dry_run,
-        })?
-    };
     let runtime = prepare_runtime(
         policy.runtime,
         &host_path,
         dev_environment.as_ref(),
-        #[cfg(target_os = "linux")]
-        harness.executable.as_deref(),
-        #[cfg(target_os = "linux")]
+        None,
         git_signing.is_some(),
-        #[cfg(target_os = "linux")]
         options.dry_run,
-        #[cfg(target_os = "macos")]
-        &paths.workspace,
         selected_runtime,
     )?;
-    let mut clipboard = if cfg!(target_os = "linux")
-        && private_terminal
-        && pi.accepts_image_paste(&options.command)
-        && !options.dry_run
-    {
-        Some(crate::clipboard::Clipboard::new(
-            session_dir.path().join("clipboard"),
-            crate::command::trusted_executable(
-                "wl-paste",
-                #[cfg(target_os = "macos")]
-                &paths.workspace,
-            )
-            .ok(),
-        )?)
-    } else {
-        None
-    };
     let mut environment = broker_environment(&brokers);
     if let Some(ca) = gateway.as_ref().and_then(GatewaySession::account_ca) {
         let path = session_dir.path().join("account-ca.pem");
@@ -513,21 +428,19 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
     let plan = ExecutionPlan {
         session_dir: session_dir.path(),
         private_home: &private_home,
+        #[cfg(target_os = "linux")]
         tool_home: &tool_home,
-        #[cfg(target_os = "macos")]
-        tool_cache: &tool_cache,
         workspace: Workspace {
             source: &workspace_mount.source,
             target: &paths.workspace,
             writable: workspace_mount.writable,
         },
+        #[cfg(target_os = "linux")]
         dev_environment: dev_environment.as_ref(),
         runtime: &runtime,
-        harness: &harness,
         brokers: &brokers,
         environment: &environment,
         private_terminal,
-        clipboard: clipboard.is_some(),
     };
     #[cfg(target_os = "linux")]
     let mut command = native::command(&executor, &plan, &options.command)?;
@@ -547,7 +460,6 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
         crate::terminal::run(
             &mut command,
             options.approval_view,
-            clipboard.as_mut(),
             crate::approval::Context {
                 workspace: &paths.workspace,
                 box_root: &paths.box_root,
@@ -569,8 +481,7 @@ pub fn run(options: RunOptions) -> Result<ExitStatus> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn macos_config() -> Result<(Option<native::Config>, Option<backend::RuntimeSelection>)>
-{
+pub(crate) fn macos_config() -> Result<Option<backend::RuntimeSelection>> {
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")?;
@@ -579,7 +490,7 @@ pub(crate) fn macos_config() -> Result<(Option<native::Config>, Option<backend::
         .unwrap_or_else(|| home.join(".config"))
         .join("slopbox");
     let config = load_config(&root)?;
-    Ok((config.macos, config.runtime))
+    Ok(config.runtime)
 }
 
 fn prepare_paths(workspace: Option<&Path>) -> Result<Paths> {
@@ -599,13 +510,17 @@ fn prepare_paths(workspace: Option<&Path>) -> Result<Paths> {
     let config_root = canonicalize_allow_missing(&absolute_path(&config_home)?.join("slopbox"))?;
     let project_id = blake3::hash(workspace.as_os_str().as_bytes()).to_hex();
     let box_root = state_root.join("boxes").join(project_id.as_str());
+    #[cfg(target_os = "linux")]
     let private_home = box_root.join("home");
+    #[cfg(target_os = "linux")]
     let tool_home = box_root.join("tool-home");
 
     Ok(Paths {
         workspace,
         box_root,
+        #[cfg(target_os = "linux")]
         private_home,
+        #[cfg(target_os = "linux")]
         tool_home,
         config_root,
         state_root,
@@ -615,7 +530,6 @@ fn prepare_paths(workspace: Option<&Path>) -> Result<Paths> {
 pub fn effective_policy(
     workspace: Option<&Path>,
     profile: Option<Profile>,
-    no_host_pi_resources: bool,
 ) -> Result<(Profile, Policy)> {
     let paths = prepare_paths(workspace)?;
     validate_workspace(&paths)?;
@@ -626,64 +540,37 @@ pub fn effective_policy(
         &config,
         &project_config,
         profile,
-        no_host_pi_resources,
         launch_config.as_ref(),
     ))
 }
 
-pub fn status(
-    workspace: Option<&Path>,
-    profile: Option<Profile>,
-    no_host_pi_resources: bool,
-    tool_network: ToolNetwork,
-    verbose: bool,
-) -> Result<String> {
+pub fn status(workspace: Option<&Path>, profile: Option<Profile>, verbose: bool) -> Result<String> {
     let paths = prepare_paths(workspace)?;
     validate_workspace(&paths)?;
     let config = load_config(&paths.config_root)?;
     let project = load_project_config(&paths.workspace)?;
     let launch_config = crate::launch::load(&paths.config_root, &paths.workspace)?;
-    let (profile, policy) = select_policy(
-        &config,
-        &project,
-        profile,
-        no_host_pi_resources,
-        launch_config.as_ref(),
-    );
-    describe_status(&paths, &config, profile, policy, tool_network, verbose)
+    let (profile, policy) = select_policy(&config, &project, profile, launch_config.as_ref());
+    describe_status(&paths, &config, profile, policy, verbose)
 }
 
-pub fn doctor(
-    workspace: Option<&Path>,
-    profile: Option<Profile>,
-    no_host_pi_resources: bool,
-) -> Result<(String, bool)> {
+pub fn doctor(workspace: Option<&Path>, profile: Option<Profile>) -> Result<(String, bool)> {
     let paths = prepare_paths(workspace)?;
     validate_workspace(&paths)?;
     let config = load_config(&paths.config_root)?;
     let project = load_project_config(&paths.workspace)?;
     let launch = crate::launch::load(&paths.config_root, &paths.workspace)?;
-    let (profile, policy) = select_policy(
-        &config,
-        &project,
-        profile,
-        no_host_pi_resources,
-        launch.as_ref(),
-    );
-    let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
+    let (profile, policy) = select_policy(&config, &project, profile, launch.as_ref());
     let mut lines = vec![
         format!("Project {}", paths.workspace.display()),
         format!(
             "Host config {}",
             paths.config_root.join("config.toml").display()
         ),
-        if config.runtime.is_some() {
-            "Setup: not needed for run/default_command; existing saved policy ceilings still apply"
-                .into()
-        } else if launch.is_some() {
-            "Setup: saved host-side policy applies".into()
+        if launch.is_some() {
+            "Saved host-side policy ceiling applies".into()
         } else {
-            "Setup: not initialized; run slopbox in a host terminal or use slopbox init".into()
+            "No saved project policy ceiling".into()
         },
     ];
     let mut checks = vec![
@@ -693,16 +580,6 @@ pub fn doctor(
                 .ensure_implemented(profile)
                 .and_then(|()| validate_runtime_selection(&config, policy))
                 .map(|()| format!("{profile}; effective policy supported")),
-        ),
-        (
-            "Pi resources",
-            {
-                let resources = pi::Pi::inspect(policy.harness, &home, &config.pi);
-                #[cfg(target_os = "macos")]
-                let resources = resources.and_then(|pi| pi.validate_native_resources());
-                resources.map(|_| "resource paths checked; extension code not executed".into())
-            }
-            .context("check host Pi resource paths, or retry with --no-host-pi-resources"),
         ),
         (
             "Model configuration",
@@ -761,7 +638,7 @@ pub fn doctor(
     lines.extend([
         String::new(),
         format!("{failures} failed check(s). No project state or approvals changed."),
-        "Not checked: full Pi launch, credential validity, signing keys, upstream connectivity, or Nix evaluation/builds/daemon access.".into(),
+        "Not checked: application launch, credential validity, signing keys, upstream connectivity, or Nix evaluation/builds/daemon access.".into(),
     ]);
     Ok((
         format!(
@@ -797,10 +674,6 @@ fn validate_runtime_selection(config: &SlopboxConfig, policy: Policy) -> Result<
             policy.runtime == RuntimeMode::Host,
             "selected executable runtimes require runtime=host; no fallback from a project or image runtime"
         );
-        ensure!(
-            policy.harness == HarnessMode::None,
-            "selected executable runtimes require harness=none; integrated Pi separation is not enabled implicitly"
-        );
     }
     Ok(())
 }
@@ -810,24 +683,15 @@ fn describe_status(
     config: &SlopboxConfig,
     profile: Profile,
     policy: Policy,
-    tool_network: ToolNetwork,
     verbose: bool,
 ) -> Result<String> {
     let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
-    let pi = pi::Pi::inspect(policy.harness, &home, &config.pi)?;
-    #[cfg(target_os = "macos")]
-    let native_resources = pi.validate_native_resources();
-    let resources = pi.resources;
     let routes = workspace_http_routes(config, &paths.workspace)?;
     let identity = configured_git_identity(config, &paths.workspace)?;
     let rewrites = configured_git_rewrites(config, &paths.workspace)?;
     let mut lines = vec![
         format!("Project       {}", paths.workspace.display()),
-        if config.runtime.is_some() {
-            "Execution     Generic commands; no automatic harness/tool separation".into()
-        } else {
-            "Agent         Pi".into()
-        },
+        "Execution     Generic commands; no automatic harness/tool separation".into(),
         format!(
             "Default env   {}",
             if config.runtime.is_some() {
@@ -865,13 +729,7 @@ fn describe_status(
         ),
         format!(
             "Tool internet {}",
-            if config.runtime.is_some() {
-                "No automatic separation; subprocesses inherit outer access"
-            } else if policy.network == NetworkMode::None || tool_network == ToolNetwork::None {
-                "General egress disabled; configured account routes remain available"
-            } else {
-                "Pi shell tools can use approved destinations and configured account routes"
-            }
+            "No automatic separation; subprocesses inherit outer access"
         ),
     ];
     if let Some(command) = &config.default_command {
@@ -952,49 +810,6 @@ fn describe_status(
             rewrite.url, rewrite.route
         ));
     }
-    lines.push(format!(
-        "Pi resources  {}",
-        match policy.harness {
-            HarnessMode::None => "No host resources".to_owned(),
-            HarnessMode::Data => "Host data only; no host extension code".to_owned(),
-            HarnessMode::Trusted => format!(
-                "Trusted code and data; {} extension(s) with model-route access when enabled",
-                resources.extensions.len()
-            ),
-        }
-    ));
-    if policy.harness != HarnessMode::None {
-        for (name, description) in [
-            ("settings.json", "filtered settings"),
-            ("AGENTS.md", "prompt data"),
-        ] {
-            let source = home.join(".pi/agent").join(name);
-            if source.is_file() {
-                lines.push(format!(
-                    "Host import   {} ({description})",
-                    source.display()
-                ));
-            }
-        }
-    }
-    let mut sources: Vec<_> = resources.mounts.iter().map(|(source, _)| source).collect();
-    sources.sort();
-    sources.dedup();
-    for source in sources {
-        lines.push(format!("Read-only     {}", source.display()));
-    }
-    for (source, target) in &resources.temporary_overlays {
-        let access = if cfg!(target_os = "macos") {
-            "unsupported on macOS"
-        } else {
-            "existing data readable, writes discarded"
-        };
-        lines.push(format!(
-            "Temporary     {} -> {}; {access}",
-            source.display(),
-            target.display()
-        ));
-    }
     lines.push("Credentials   Broker credentials stay on the host".into());
     lines.push(format!(
         "Isolation     {}",
@@ -1009,9 +824,7 @@ fn describe_status(
         .and_then(|()| backend::ensure_supported())
         .and_then(|()| validate_runtime_selection(config, policy));
     #[cfg(target_os = "macos")]
-    let supported = supported
-        .and_then(|()| native::validate_policy(policy))
-        .and(native_resources);
+    let supported = supported.and_then(|()| native::validate_policy(policy));
     if let Err(error) = supported {
         lines.push(format!("Launch        Unsupported: {error}"));
     }
@@ -1094,16 +907,6 @@ fn describe_status(
                 ));
             }
         }
-        for (source, target) in resources.mounts {
-            lines.push(format!(
-                "read-only-mount: {} -> {}",
-                source.display(),
-                target.display()
-            ));
-        }
-        for extension in resources.extensions {
-            lines.push(format!("trusted-extension: {}", extension.display()));
-        }
     }
     Ok(format!(
         "{}\n",
@@ -1113,87 +916,6 @@ fn describe_status(
             .collect::<Vec<_>>()
             .join("\n")
     ))
-}
-
-pub fn init_project(
-    workspace: Option<&Path>,
-    changes: Option<WorkspaceMode>,
-    no_host_pi_resources: bool,
-    yes: bool,
-) -> Result<LaunchConfig> {
-    backend::ensure_supported()?;
-    ensure!(
-        !yes || changes.is_some(),
-        "--yes requires an explicit --changes mode"
-    );
-    if !yes {
-        crate::launch::require_terminal()?;
-    }
-    let paths = prepare_paths(workspace)?;
-    validate_workspace(&paths)?;
-    let config = load_config(&paths.config_root)?;
-    let project = load_project_config(&paths.workspace)?;
-    ensure!(
-        config.runtime.is_none(),
-        "selected executable runtimes do not provide Pi project setup; use slopbox run -- COMMAND"
-    );
-    let previous = crate::launch::load(&paths.config_root, &paths.workspace)?;
-    let (profile, mut policy) = select_policy(&config, &project, None, no_host_pi_resources, None);
-    policy.ensure_implemented(profile)?;
-    let mut input = std::io::stdin().lock();
-    let mut output = std::io::stderr().lock();
-    writeln!(
-        output,
-        "Configure {} for Pi.",
-        crate::launch::terminal_text(&paths.workspace.to_string_lossy())
-    )?;
-    let changes = match changes {
-        Some(changes) => changes,
-        None => crate::launch::choose_changes(
-            &mut input,
-            &mut output,
-            policy.workspace,
-            previous
-                .as_ref()
-                .map(|config| config.policy.workspace)
-                .unwrap_or(policy.workspace),
-        )?,
-    };
-    ensure!(
-        changes <= policy.workspace,
-        "requested changes={changes} exceeds the current workspace={} policy",
-        policy.workspace
-    );
-    policy.workspace = changes;
-    #[cfg(target_os = "macos")]
-    native::validate_policy(policy)?;
-    let launch = LaunchConfig {
-        workspace: paths.workspace.clone(),
-        agent: Agent::Pi,
-        policy,
-    };
-    writeln!(
-        output,
-        "\n{}",
-        describe_status(
-            &paths,
-            &config,
-            profile,
-            policy,
-            ToolNetwork::General,
-            false
-        )?
-    )?;
-    if !yes && !crate::launch::confirm(&mut input, &mut output)? {
-        bail!("setup cancelled; no configuration changed");
-    }
-    let path = crate::launch::save(&paths.config_root, &launch, previous.as_ref())?;
-    writeln!(
-        output,
-        "Saved {}",
-        crate::launch::terminal_text(&path.to_string_lossy())
-    )?;
-    Ok(launch)
 }
 
 pub fn launch(agent_arguments: Vec<OsString>, approval_view: bool) -> Result<ExitStatus> {
@@ -1212,8 +934,6 @@ pub fn launch(agent_arguments: Vec<OsString>, approval_view: bool) -> Result<Exi
             workspace: Some(paths.workspace),
             profile: None,
             dev_env: DevEnvironment::Auto,
-            tool_network: ToolNetwork::General,
-            no_host_pi_resources: false,
             command: command
                 .into_iter()
                 .map(OsString::from)
@@ -1224,58 +944,7 @@ pub fn launch(agent_arguments: Vec<OsString>, approval_view: bool) -> Result<Exi
             launch_config: None,
         });
     }
-    ensure!(
-        config.runtime.is_none(),
-        "no default_command configured; use slopbox run -- COMMAND or set a host default_command"
-    );
-    let (launch, initialized) = match crate::launch::load(&paths.config_root, &paths.workspace)? {
-        Some(config) => (config, false),
-        None => (
-            init_project(Some(&paths.workspace), None, false, false)?,
-            true,
-        ),
-    };
-    let config = load_config(&paths.config_root)?;
-    let project = load_project_config(&paths.workspace)?;
-    let (profile, policy) = select_policy(&config, &project, None, false, Some(&launch));
-    policy.ensure_implemented(profile)?;
-    if !initialized {
-        eprint!(
-            "{}",
-            describe_status(
-                &paths,
-                &config,
-                profile,
-                policy,
-                ToolNetwork::General,
-                false
-            )?
-        );
-    }
-    #[cfg(target_os = "linux")]
-    ensure!(
-        find_optional_executable("pi", &sandbox_path()?).is_some(),
-        "Pi is not available in the host Nix PATH; install Pi on the host, then retry"
-    );
-    ensure!(
-        policy.runtime != RuntimeMode::Project || paths.workspace.join("flake.nix").is_file(),
-        "this policy requires a project flake development environment, but flake.nix is missing"
-    );
-    check_model_configuration(&paths, policy)?;
-    let command = match launch.agent {
-        Agent::Pi => pi::launch_command(agent_arguments),
-    };
-    run(RunOptions {
-        workspace: Some(paths.workspace),
-        profile: None,
-        dev_env: DevEnvironment::Auto,
-        tool_network: ToolNetwork::General,
-        no_host_pi_resources: false,
-        command,
-        dry_run: false,
-        approval_view,
-        launch_config: Some(launch),
-    })
+    bail!("no default_command configured; use slopbox run -- COMMAND or set a host default_command")
 }
 
 pub fn effective_git_identity(
@@ -1425,7 +1094,6 @@ fn select_policy(
     config: &SlopboxConfig,
     project_config: &ProjectConfig,
     profile: Option<Profile>,
-    no_host_pi_resources: bool,
     launch_config: Option<&LaunchConfig>,
 ) -> (Profile, Policy) {
     let profile = profile.unwrap_or(config.profile);
@@ -1434,9 +1102,6 @@ fn select_policy(
         policy = policy.restrict(launch.policy);
     }
     policy = project_config.policy.apply(policy);
-    if no_host_pi_resources {
-        policy = policy.without_host_harness();
-    }
     (profile, policy)
 }
 
@@ -2088,6 +1753,7 @@ fn validate_workspace(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn create_private_home(path: &Path) -> Result<()> {
     let mut builder = DirBuilder::new();
     builder.recursive(true).mode(0o700);
@@ -2113,8 +1779,13 @@ fn load_config(config_root: &Path) -> Result<SlopboxConfig> {
         return Ok(SlopboxConfig::default());
     }
     let contents = read_text(&path, "Slopbox configuration")?;
-    toml::from_str(&contents)
-        .with_context(|| format!("invalid Slopbox configuration {}", path.display()))
+    let config: SlopboxConfig = toml::from_str(&contents)
+        .with_context(|| format!("invalid Slopbox configuration {}", path.display()))?;
+    ensure!(
+        matches!(config.policy.harness, None | Some(HarnessMode::None)),
+        "built-in harness integration was removed; use harness=none and an external integration"
+    );
+    Ok(config)
 }
 
 fn matches_workspace(binding: Option<&Path>, home: &Path, workspace: &Path) -> Result<bool> {
@@ -2270,8 +1941,13 @@ fn load_project_config(workspace: &Path) -> Result<ProjectConfig> {
         "project Slopbox configuration must be a regular file"
     );
     let contents = read_text(&path, "project Slopbox configuration")?;
-    toml::from_str(&contents)
-        .with_context(|| format!("invalid project Slopbox configuration {}", path.display()))
+    let config: ProjectConfig = toml::from_str(&contents)
+        .with_context(|| format!("invalid project Slopbox configuration {}", path.display()))?;
+    ensure!(
+        matches!(config.policy.harness, None | Some(HarnessMode::None)),
+        "built-in harness integration was removed; use harness=none and an external integration"
+    );
+    Ok(config)
 }
 
 fn broker_environment(brokers: &BrokerConnections) -> Vec<(OsString, OsString)> {
@@ -2652,12 +2328,13 @@ git_urls = ["git@forge.example:repo.git"]
             },
         };
 
-        let (_, policy) = select_policy(&host, &project, None, false, None);
+        let (_, policy) = select_policy(&host, &project, None, None);
         assert_eq!(policy.harness, HarnessMode::None);
     }
 
     #[test]
     fn saved_launch_policy_remains_a_ceiling_when_project_policy_changes() {
+        use crate::launch::LegacyAgent;
         let host = SlopboxConfig::default();
         let saved_policy = PolicyRequest {
             workspace: Some(WorkspaceMode::Staged),
@@ -2669,11 +2346,10 @@ git_urls = ["git@forge.example:repo.git"]
         .apply(Profile::Developer.policy());
         let saved = LaunchConfig {
             workspace: PathBuf::from("/workspace"),
-            agent: Agent::Pi,
+            agent: LegacyAgent::Pi,
             policy: saved_policy,
         };
-        let (_, effective) =
-            select_policy(&host, &ProjectConfig::default(), None, false, Some(&saved));
+        let (_, effective) = select_policy(&host, &ProjectConfig::default(), None, Some(&saved));
         assert_eq!(effective, saved_policy);
         let narrower_host = SlopboxConfig {
             policy: PolicyRequest {
@@ -2686,12 +2362,11 @@ git_urls = ["git@forge.example:repo.git"]
             &narrower_host,
             &ProjectConfig::default(),
             None,
-            false,
             Some(&saved),
         );
         assert_eq!(effective.workspace, WorkspaceMode::ReadOnly);
         assert_eq!(effective.network, NetworkMode::None);
-        let (_, reset) = select_policy(&host, &ProjectConfig::default(), None, false, None);
+        let (_, reset) = select_policy(&host, &ProjectConfig::default(), None, None);
         assert_eq!(reset, Profile::Developer.policy());
     }
 
